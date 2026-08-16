@@ -418,7 +418,18 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
         expanded.push(st);
         continue;
       }
-      const fits=avail.filter(i=>st.time+i.time<=24);
+      let fits=avail.filter(i=>st.time+i.time<=24);
+
+      // v0.38 groove-growth rule:
+      // During days 1-2, use 4h crafts only while current groove is below
+      // the CURRENT progression cap (25 / 35 / 45 etc.).
+      // The instant the cap is reached, release the restriction even if
+      // there are hours left in the same day.
+      if(dayIndex<=1 && st.groove<cap){
+        const fourHourFits=fits.filter(i=>i.time===4);
+        if(fourHourFits.length) fits=fourHourFits;
+      }
+
       if(!fits.length){
         expanded.push(st);
         continue;
@@ -591,39 +602,8 @@ function mergeUniqueWeeks(groups, limit){
 }
 
 function preserveEarlyWeekDiversity(weeks, dayIndex, cap){
-  // During days 1-2, do NOT let one objective dominate.
-  // Keep:
-  //  - high actual value branches
-  //  - high groove branches
-  //  - low material burden branches
-  //  - balanced branches
-  // Then all of them are allowed to continue through days 3-5.
-  if(dayIndex>1) return weeks;
-
-  const byValue=weeks.slice().sort((a,b)=>b.value-a.value);
-  const byGroove=weeks.slice().sort((a,b)=>{
-    if(b.groove!==a.groove) return b.groove-a.groove;
-    return b.value-a.value;
-  });
-  const byMaterial=weeks.slice().sort((a,b)=>{
-    const ba=materialStateBurdenForBeam(a);
-    const bb=materialStateBurdenForBeam(b);
-    if(ba!==bb) return ba-bb;
-    return b.value-a.value;
-  });
-  const byBalanced=weeks.slice().sort((a,b)=>{
-    const sa=a.value + a.groove*180 - materialStateBurdenForBeam(a)*2.2;
-    const sb=b.value + b.groove*180 - materialStateBurdenForBeam(b)*2.2;
-    return sb-sa;
-  });
-
-  // Larger early beam, but composed of different kinds of good candidates.
-  return mergeUniqueWeeks([
-    byValue.slice(0,40),
-    byGroove.slice(0,40),
-    byMaterial.slice(0,40),
-    byBalanced.slice(0,50)
-  ],130);
+  // v0.38: the cap-aware 4h growth rule makes the expensive wide search unnecessary.
+  return weeks.slice(0,48);
 }
 
 function chooseSchedule(){
@@ -657,14 +637,14 @@ function chooseSchedule(){
     effTransitions:0, days:[], produced:{}, materials:{}, daySignatures:[], grooveHistory:[]
   }];
 
-  const WEEK_BEAM=130;
+  const WEEK_BEAM=48;
 
   for(let day=0;day<5;day++){
     let next=[];
     for(const wk of weekBeam){
-      const dayCandidates=daySearch(avail,workshops,cap,wk.groove,wk.favor,wk.materials,90,day);
+      const dayCandidates=daySearch(avail,workshops,cap,wk.groove,wk.favor,wk.materials,60,day);
 
-      for(const dc of dayCandidates.slice(0,16)){
+      for(const dc of dayCandidates.slice(0,12)){
         const produced={...wk.produced};
         for(const sl of dc.slots){
           produced[sl.item.id]=(produced[sl.item.id]||0)+sl.qty;
