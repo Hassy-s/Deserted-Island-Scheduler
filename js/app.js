@@ -30,21 +30,33 @@ function weightedHistoryMaterials(){
 }
 function historyMaterialPenalty(item,workshops){
   if(searchMode()!=="standard") return 0;
-  const hist=weightedHistoryMaterials();
-  if(!Object.keys(hist).length) return 0;
+  const hist=ACTIVE_HISTORY_MATERIALS || {};
   let p=0;
   for(const m of (item.materials||[])){
-    // Weak tie-breaker only: recent overuse gently lowers priority.
     p += (hist[m.name]||0) * m.qty * workshops * 0.42;
   }
   return p;
 }
 
 let excludedMaterials=new Set(), LAST=null, activeDay=0;
+
+// v0.41 generation context: values that are constant during one search.
+let ACTIVE_SEARCH_MODE=null;
+let ACTIVE_CAPS=null;
+let ACTIVE_HISTORY_MATERIALS=null;
+
 const $=s=>document.querySelector(s);
 const collator=new Intl.Collator("ja");
 const intersects=(a,b)=>a.some(x=>b.includes(x));
-const efficient=(a,b)=>a&&b&&a.id!==b.id&&intersects(a.cats,b.cats);
+const EFFICIENT_IDS=new Map();
+for(const a of ITEMS){
+  const set=new Set();
+  for(const b of ITEMS){
+    if(a.id!==b.id && intersects(a.cats,b.cats)) set.add(b.id);
+  }
+  EFFICIENT_IDS.set(a.id,set);
+}
+const efficient=(a,b)=>!!(a&&b&&EFFICIENT_IDS.get(a.id)?.has(b.id));
 
 function autoWorkshops(rank){return rank>=15?4:rank>=5?3:2}
 function itemUsesExcludedMaterial(item){
@@ -174,7 +186,8 @@ function addMaterials(total,item,workshops){
   return out;
 }
 
-function searchMode(){ return $("#searchModeSelect").value==="max" ? "max" : "standard"; }
+function rawSearchMode(){ return $("#searchModeSelect").value==="max" ? "max" : "standard"; }
+function searchMode(){ return ACTIVE_SEARCH_MODE || rawSearchMode(); }
 
 const RARE_MATERIALS = new Set([
   "無人島のアリッサム","無人島のガーネット原石","無人島のスプルース原木",
@@ -216,6 +229,7 @@ function typeMultiplier(name){
 }
 
 function capValue(id,fallback){
+  if(ACTIVE_CAPS && ACTIVE_CAPS[id]!==undefined) return ACTIVE_CAPS[id];
   const el=$(id);
   const v=el ? +el.value : fallback;
   return Number.isFinite(v) && v>=1 ? v : fallback;
@@ -324,11 +338,6 @@ function capViolationScore(materials){
 function practicalBurden(materials,days){
   return materialBurden(materials)+capViolationScore(materials);
 }
-function practicalBurden(materials,days){
-  // v0.9 deliberately does NOT penalize 8h crafts by duration alone.
-  // If an 8h craft uses easy/old materials, it is allowed naturally.
-  return materialBurden(materials);
-}
 
 function earlyGrooveBonus(dayIndex, isEff, grooveBefore, grooveAfter, grooveCapValue){
   if(!isEff || grooveAfter<=grooveBefore) return 0;
@@ -436,16 +445,11 @@ function cloneDayCandidates(rows){
 }
 
 function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterials={}, beamWidth=180, dayIndex=0){
-  const cacheKey=daySearchCacheKey(
-    avail,workshops,cap,startGroove,startFavor,startMaterials,beamWidth,dayIndex
-  );
-  const cached=DAY_SEARCH_CACHE.get(cacheKey);
-  if(cached) return cloneDayCandidates(cached);
-
   // Beam-search all 24h sequences. State contains time, prev, groove, favor remaining and value.
   let beam=[{
     time:0, prev:null, groove:startGroove, favor:cloneFavor(startFavor),
-    value:0, effTransitions:0, slots:[], materials:{...startMaterials}, dayMaterials:{}
+    value:0, effTransitions:0, slots:[], materials:{...startMaterials}, dayMaterials:{},
+    burden:materialBurden(startMaterials||{})
   }];
 
   const bestByKey = new Map();
@@ -470,6 +474,33 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
         if(fourHourFits.length) fits=fourHourFits;
       }
 
+      // v0.41 structural pruning:
+      // Prefer staying under material caps first. Within that practical pool,
+      // if an efficient continuation exists, non-efficient branches are not
+      // worth exploring except an unfinished Favor target.
+      if(st.prev && fits.length){
+        let practicalPool=fits;
+        if(searchMode()==="standard"){
+          const underCap=fits.filter(item=>!wouldExceedStandardCap(st.materials,item,workshops));
+          if(underCap.length) practicalPool=underCap;
+        }
+
+        const efficientPool=practicalPool.filter(item=>efficient(st.prev,item));
+        if(efficientPool.length){
+          const requiredFavor=practicalPool.filter(item=>
+            !efficient(st.prev,item) && (st.favor?.[item.id]||0)>0
+          );
+          const seen=new Set();
+          fits=[...efficientPool,...requiredFavor].filter(item=>{
+            if(seen.has(item.id)) return false;
+            seen.add(item.id);
+            return true;
+          });
+        }else{
+          fits=practicalPool;
+        }
+      }
+
       if(!fits.length){
         expanded.push(st);
         continue;
@@ -490,7 +521,7 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
 
         // v0.39: "あわせて生産" doubles output, so if an efficient
         // continuation exists, a non-efficient choice needs a very good reason.
-        if(hasEfficientChoice && !isEff) rank -= 2600;
+        if(hasEfficientChoice && !isEff) rank -= 1200;
 
         return {
           item,
@@ -505,7 +536,7 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
         const underCap=ranked.filter(x=>!x.overCap);
         if(underCap.length) ranked=underCap;
       }
-      ranked=ranked.slice(0,7);
+      ranked=ranked.slice(0,6);
 
       for(const {item} of ranked){
         const isEff=efficient(st.prev,item);
@@ -517,6 +548,7 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
         applyProductionToFavor(favor,item.id,qty);
         const materials=addMaterials(st.materials,item,workshops);
         const dayMaterials=addMaterials(st.dayMaterials,item,workshops);
+        const burden=materialBurden(materials);
         expanded.push({
           time:st.time+item.time,
           prev:item,
@@ -526,6 +558,7 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
           effTransitions:st.effTransitions+(isEff?1:0),
           materials,
           dayMaterials,
+          burden,
           slots:[...st.slots,{
             item,start:st.time,end:st.time+item.time,eff:isEff,qty,
             grooveBefore,grooveAfter,valueWithGroove:value
@@ -540,14 +573,14 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
     for(const st of expanded){
       // v0.39: coarse material bucket avoids treating tiny material
       // differences as completely separate branches.
-      const matLoad=Math.round(materialBurden(st.materials||{})/120);
+      const matLoad=Math.round((st.burden||0)/120);
       const key=`${st.time}|${st.prev?st.prev.id:0}|${st.groove}|${favorKey(st.favor)}|${matLoad}`;
       const old=bestByKey.get(key);
       if(!old){
         bestByKey.set(key,st);
       }else{
-        const stBurden=materialBurden(st.materials||{});
-        const oldBurden=materialBurden(old.materials||{});
+        const stBurden=st.burden||0;
+        const oldBurden=old.burden||0;
         const dominates =
           (st.value>=old.value && stBurden<=oldBurden) &&
           (st.value>old.value || stBurden<oldBurden);
@@ -560,8 +593,8 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
     beam=[...bestByKey.values()].sort((a,b)=>{
       // Favor shortfall dominates; then value, then groove, then efficient transitions.
       const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
-      const sa=a.value + a.groove*80 + a.effTransitions*40 - pa*2200 - materialBurden(a.materials);
-      const sb=b.value + b.groove*80 + b.effTransitions*40 - pb*2200 - materialBurden(b.materials);
+      const sa=a.value + a.groove*80 + a.effTransitions*40 - pa*2200 - (a.burden||0);
+      const sb=b.value + b.groove*80 + b.effTransitions*40 - pb*2200 - (b.burden||0);
       return sb-sa;
     }).slice(0,beamWidth);
 
@@ -577,8 +610,6 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
     }
     return b.value-a.value;
   }).slice(0,24);
-
-  DAY_SEARCH_CACHE.set(cacheKey,cloneDayCandidates(result));
   return result;
 }
 
@@ -646,7 +677,7 @@ function grooveTimingScore(wk, grooveCapValue){
 
 
 function materialStateBurdenForBeam(wk){
-  return practicalBurden(wk.materials||{},wk.days||[]);
+  return wk.burden ?? practicalBurden(wk.materials||{},wk.days||[]);
 }
 
 function mergeUniqueWeeks(groups, limit){
@@ -672,6 +703,15 @@ function preserveEarlyWeekDiversity(weeks, dayIndex, cap){
 }
 
 function chooseSchedule(){
+  ACTIVE_SEARCH_MODE=rawSearchMode();
+  ACTIVE_CAPS={
+    "#capGather":+$("#capGather").value,
+    "#capCrop":+$("#capCrop").value,
+    "#capAnimal":+$("#capAnimal").value,
+    "#capGranary":+$("#capGranary").value
+  };
+  ACTIVE_HISTORY_MATERIALS=ACTIVE_SEARCH_MODE==="standard" ? weightedHistoryMaterials() : {};
+
   const avail=available();
   if(!avail.length) throw new Error("使用可能な島産品がありません。");
 
@@ -699,17 +739,17 @@ function chooseSchedule(){
   // Weekly beam: each branch chooses one complete 24h day schedule.
   let weekBeam=[{
     day:0, groove:0, favor:cloneFavor(favorStart), value:0,
-    effTransitions:0, days:[], produced:{}, materials:{}, daySignatures:[], grooveHistory:[]
+    effTransitions:0, days:[], produced:{}, materials:{}, burden:0, daySignatures:[], grooveHistory:[]
   }];
 
-  const WEEK_BEAM=34;
+  const WEEK_BEAM=28;
 
   for(let day=0;day<5;day++){
     let next=[];
     for(const wk of weekBeam){
-      const dayCandidates=daySearch(avail,workshops,cap,wk.groove,wk.favor,wk.materials,38,day);
+      const dayCandidates=daySearch(avail,workshops,cap,wk.groove,wk.favor,wk.materials,28,day);
 
-      for(const dc of dayCandidates.slice(0,9)){
+      for(const dc of dayCandidates.slice(0,8)){
         const produced={...wk.produced};
         for(const sl of dc.slots){
           produced[sl.item.id]=(produced[sl.item.id]||0)+sl.qty;
@@ -727,6 +767,8 @@ function chooseSchedule(){
           continue;
         }
 
+        const weeklyBurden=practicalBurden(materials,[...wk.days,dc.slots]);
+
         next.push({
           day:day+1,
           groove:dc.groove,
@@ -736,6 +778,7 @@ function chooseSchedule(){
           days:[...wk.days,dc.slots],
           produced,
           materials,
+          burden:weeklyBurden,
           daySignatures:[...wk.daySignatures,sig],
           grooveHistory:[...wk.grooveHistory,dc.groove]
         });
@@ -749,8 +792,8 @@ function chooseSchedule(){
       const remainingDays=5-(day+1);
       const aFeasiblePenalty=pa * (remainingDays===0 ? 1000000 : 5000);
       const bFeasiblePenalty=pb * (remainingDays===0 ? 1000000 : 5000);
-      const burdenA=practicalBurden(a.materials,a.days);
-      const burdenB=practicalBurden(b.materials,b.days);
+      const burdenA=a.burden ?? practicalBurden(a.materials,a.days);
+      const burdenB=b.burden ?? practicalBurden(b.materials,b.days);
 
       if(searchMode()==="standard"){
         // Standard mode: material burden dominates.
@@ -832,8 +875,8 @@ function chooseSchedule(){
     best=candidates.slice().sort((a,b)=>b.value-a.value)[0];
   }else{
     best=candidates.slice().sort((a,b)=>{
-      const burdenA=practicalBurden(a.materials,a.days);
-      const burdenB=practicalBurden(b.materials,b.days);
+      const burdenA=a.burden ?? practicalBurden(a.materials,a.days);
+      const burdenB=b.burden ?? practicalBurden(b.materials,b.days);
 
       // Final decision uses the actually calculated five-day value.
       // No future-value estimate is used here.
@@ -958,7 +1001,6 @@ function renderMaterials(){
   }).join("");
 }
 function render(){
-  DAY_SEARCH_CACHE.clear();
   try{LAST=chooseSchedule()}
   catch(e){
     $("#scheduleBody").innerHTML=`<tr><td colspan="7" style="text-align:center;color:#b94d4d;padding:30px">${e.message}</td></tr>`;
