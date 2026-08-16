@@ -11,7 +11,7 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v0.23 α</span>
+      <span class="ver">v0.29 α</span>
     </div>
     <div class="header-actions">
       <button id="generate" class="primary header-generate">⚙ スケジュールを生成</button>
@@ -23,50 +23,6 @@
 
   <div class="layout">
     <aside>
-      
-
-      <section class="panel">
-        <div class="panel-title">進行度・設定</div>
-        <div class="panel-body">
-          <div class="form-row">
-            <label>開拓ランク</label>
-            <input id="rank" type="number" min="3" max="20" value="5">
-          </div>
-          <div class="form-row">
-            <label>工房の数</label>
-            <select id="workshops">
-              <option>2</option><option selected>3</option><option>4</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <label>ランドマーク数</label>
-            <select id="landmarks">
-              <option value="1">1（やる気上限15）</option>
-              <option value="2" selected>2（やる気上限20）</option>
-              <option value="3">3（やる気上限25）</option>
-              <option value="4">4（やる気上限35）</option>
-              <option value="5">5（やる気上限45）</option>
-            </select>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-title">除外設定</div>
-        <div class="panel-body">
-          <div class="exclude-head exclude-head-compact">
-            <div class="exclude-title">使いたくない島産品</div>
-            <div class="exclude-actions">
-              <button class="secondary" id="allOn">すべて除外</button>
-              <button class="secondary" id="allOff">除外をすべて解除</button>
-            </div>
-          </div>
-          <input id="filter" type="text" placeholder="島産品名を検索">
-          <div id="itemGrid" class="exclude-box" style="margin-top:8px"></div>
-          <div id="excludeSummary" class="small" style="margin-top:7px"></div>
-        </div>
-      </section>
-
       <section class="panel">
         <div class="panel-title">ねこみみさんのおねがい</div>
         <div class="panel-body">
@@ -82,13 +38,27 @@
         </div>
       </section>
 
-      
-
-      
-      <section class="panel">
-        <div class="panel-title">検索設定</div>
-        <div class="small" style="padding:0 14px 8px">標準では今週の素材分散を優先し、確定済みの直近数週間で多く使った素材は少しだけ選ばれにくくなります。</div>
+<section class="panel">
+        <div class="panel-title">除外設定</div>
         <div class="panel-body">
+          <div class="exclude-head exclude-head-compact">
+            <div class="exclude-title">使いたくない島産品</div>
+            <div class="exclude-actions">
+              <button class="secondary" id="allOn">すべて除外</button>
+              <button class="secondary" id="allOff">除外をすべて解除</button>
+            </div>
+          </div>
+          <input id="filter" type="text" placeholder="島産品名を検索">
+          <div id="itemGrid" class="exclude-box" style="margin-top:8px"></div>
+          <div id="excludeSummary" class="small" style="margin-top:7px"></div>
+        </div>
+      </section>
+
+<section class="panel search-panel">
+        <details id="searchSettingsDetails">
+          <summary class="panel-title search-summary">検索設定</summary>
+          <div class="small" style="padding:0 14px 8px">標準では今週の素材分散を優先し、確定済みの直近数週間で多く使った素材は少しだけ選ばれにくくなります。</div>
+          <div class="panel-body">
           <div class="form-row">
             <label>検索モード</label>
             <select id="searchModeSelect">
@@ -109,21 +79,49 @@
           </details>
 
           <div id="generateStatus" class="small" style="margin-top:8px;min-height:18px"></div>
-        </div>
+          </div>
+        </details>
+      </section>
+
+<section class="panel progress-panel">
+        <details id="progressDetails">
+          <summary class="panel-title progress-summary">進行度・設定</summary>
+          <div class="panel-body">
+          <div class="form-row">
+            <label>開拓ランク</label>
+            <input id="rank" type="number" min="3" max="20" value="5">
+          </div>
+          <div class="form-row">
+            <label>工房の数</label>
+            <select id="workshops">
+              <option>2</option><option selected>3</option><option>4</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>ランドマーク数</label>
+            <select id="landmarks">
+              <option value="1">1（やる気上限15）</option>
+              <option value="2" selected>2（やる気上限20）</option>
+              <option value="3">3（やる気上限25）</option>
+              <option value="4">4（やる気上限35）</option>
+              <option value="5">5（やる気上限45）</option>
+            </select>
+          </div>
+          </div>
+        </details>
       </section>
     </aside>
 
     <main>
       <section class="panel">
-        <div class="panel-title">生成結果のサマリー</div>
+        <div class="panel-title">今週の工房計画</div>
         <div id="summary" class="summary">
           <div class="summary-card"><div class="label">工房の数</div><div class="value">-</div></div>
-          <div class="summary-card"><div class="label">生産スロット / 週</div><div class="value">-</div></div>
+          <div class="summary-card coin-card"><div class="label">概算青船貨獲得数</div><div class="value">-</div><div class="sub">青船貨（目安）</div></div>
           <div class="summary-card"><div class="label">あわせて生産回数</div><div class="value">-</div></div>
           <div class="summary-card"><div class="label">やる気</div><div class="value">-</div></div>
           <div class="summary-card status"><div class="label">制約の達成状況</div><div class="value">未生成</div></div>
         </div>
-        <div class="note">※ 価値目安には「工房のやる気」を反映しています。標準検索では最高効率付近の候補から素材負担の軽い案を優先します。人気・需要・供給変化は考慮しません。</div>
       </section>
 
       <section class="panel schedule-panel">
@@ -170,6 +168,8 @@
           <li>全工房が同じスケジュールになるように生成します。</li>
           <li>「あわせて生産」は、特性が1つ以上共通する異なる島産品を連続させた場合に成立します。成立した生産の開始時に、工房1棟につきやる気が+1されます。</li>
           <li>ねこみみさんのおねがいを使用する場合は絶対達成条件です。完成個数は通常＝工房数×1、あわせて生産＝工房数×2として集計します。</li>
+          <li>概算青船貨獲得数には「工房のやる気」を反映しています。ゲーム内の人気・需要・供給変化は考慮していないため、実際の獲得数とは異なります。</li>
+          <li>標準検索では最高効率付近の候補から素材負担の軽い案を優先します。</li>
         </ul>
       </div>
     </main>

@@ -1,5 +1,4 @@
-// 無人島工房スケジューラー - UI / 保存 / スケジュール生成
-// data.js を先に読み込んでください。
+// UI・保存・スケジュール生成処理
 
 // 4h / 6h / 8h product names cross-checked against user-provided in-game lists (v0.19).
 const STORAGE_KEY="island_workshop_scheduler_v019";
@@ -74,9 +73,6 @@ function save(){
     landmarks:+$("#landmarks").value,
     excluded:[...excluded],
     favor:favorEnabled(),
-    f4:$("#favor4").value,
-    f6:$("#favor6").value,
-    f8:$("#favor8").value,
     searchMode:searchMode(),
     capGather:+$("#capGather").value,
     capCrop:+$("#capCrop").value,
@@ -102,9 +98,9 @@ function load(){
     $("#favorOff").checked=!s.favor;
     $("#favors").classList.toggle("on",!!s.favor);
     fillFavorSelects();
-    if(s.f4)$("#favor4").value=s.f4;
-    if(s.f6)$("#favor6").value=s.f6;
-    if(s.f8)$("#favor8").value=s.f8;
+    $("#favor4").value="";
+    $("#favor6").value="";
+    $("#favor8").value="";
     $("#searchModeSelect").value = s.searchMode==="max" ? "max" : "standard";
     if(s.capGather!==undefined)$("#capGather").value=s.capGather;
     if(s.capCrop!==undefined)$("#capCrop").value=s.capCrop;
@@ -677,10 +673,10 @@ function renderSummary(){
       <div class="label">工房の数</div>
       <div class="value">${LAST.workshops}棟</div>
     </div>
-    <div class="summary-card">
-      <div class="label">生産スロット / 週</div>
-      <div class="value">${LAST.totalSlots}</div>
-      <div class="sub">全工房合計</div>
+    <div class="summary-card coin-card">
+      <div class="label">概算青船貨獲得数</div>
+      <div class="value">${Math.round(LAST.estimatedValue).toLocaleString()}</div>
+      <div class="sub">青船貨（目安）</div>
     </div>
     <div class="summary-card">
       <div class="label">あわせて生産回数</div>
@@ -690,7 +686,7 @@ function renderSummary(){
     <div class="summary-card">
       <div class="label">工房のやる気</div>
       <div class="value">${LAST.groove}/${LAST.grooveCap}</div>
-      <div class="sub">売上 +${LAST.groove}% / 価値目安 ${Math.round(LAST.estimatedValue).toLocaleString()}</div>
+      <div class="sub">売上 +${LAST.groove}%</div>
     </div>
     <div class="summary-card status">
       <div class="label">制約の達成状況</div>
@@ -816,7 +812,7 @@ $("#reset").onclick=()=>{
   fillFavorSelects();renderExclude();updateExcludeSummary();
   $("#summary").innerHTML=`
     <div class="summary-card"><div class="label">工房の数</div><div class="value">-</div></div>
-    <div class="summary-card"><div class="label">生産スロット / 週</div><div class="value">-</div></div>
+    <div class="summary-card coin-card"><div class="label">概算青船貨獲得数</div><div class="value">-</div><div class="sub">青船貨（目安）</div></div>
     <div class="summary-card"><div class="label">あわせて生産回数</div><div class="value">-</div></div>
     <div class="summary-card"><div class="label">やる気</div><div class="value">-</div></div>
     <div class="summary-card status"><div class="label">制約の達成状況</div><div class="value">未生成</div></div>`;

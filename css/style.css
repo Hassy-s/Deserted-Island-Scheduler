@@ -415,6 +415,39 @@ button:disabled{opacity:.65;cursor:wait}
   white-space:nowrap;
   font-size:13px;
 }
+.summary-card.coin-card .value{font-size:30px;font-weight:900}
+.summary-card.coin-card .label{font-weight:900}
+
+
+.progress-panel .progress-summary{
+  cursor:pointer;
+  list-style:none;
+  user-select:none;
+}
+.progress-panel .progress-summary::-webkit-details-marker{display:none}
+.progress-panel .progress-summary::after{
+  content:"＋";
+  float:right;
+  font-size:18px;
+  line-height:1;
+}
+.progress-panel details[open] .progress-summary::after{content:"－"}
+
+
+.search-panel .search-summary{
+  cursor:pointer;
+  list-style:none;
+  user-select:none;
+}
+.search-panel .search-summary::-webkit-details-marker{display:none}
+.search-panel .search-summary::after{
+  content:"＋";
+  float:right;
+  font-size:18px;
+  line-height:1;
+}
+.search-panel details[open] .search-summary::after{content:"－"}
+
 @media(max-width:520px){
   .exclude-head-compact{align-items:flex-start;flex-direction:column}
 }
