@@ -507,6 +507,33 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
 function daySignature(slots){
   return (slots||[]).map(s=>s.item.id).join("-");
 }
+
+function grooveTimingScore(wk, grooveCapValue){
+  if(searchMode()!=="standard") return 0;
+  const h=wk.grooveHistory||[];
+  if(!h.length || grooveCapValue<=0) return 0;
+
+  // Desired end-of-day progression:
+  // Day1 ~45%, Day2 ~85%, Day3 100%.
+  const targets=[0.45,0.85,1.00,1.00,1.00];
+
+  let score=0;
+  for(let d=0;d<h.length;d++){
+    const g=h[d];
+    const target=grooveCapValue*targets[d];
+    const deficit=Math.max(0,target-g);
+
+    // Missing an early target is costly because later crafts lose the groove bonus.
+    const deficitWeight=[220,260,300,80,20][d]||0;
+    score -= deficit*deficitWeight;
+
+    // Earlier groove gets additional positive value.
+    const carryWeight=[150,110,65,25,5][d]||0;
+    score += g*carryWeight;
+  }
+  return score;
+}
+
 function chooseSchedule(){
   const avail=available();
   if(!avail.length) throw new Error("使用可能な島産品がありません。");
@@ -535,7 +562,7 @@ function chooseSchedule(){
   // Weekly beam: each branch chooses one complete 24h day schedule.
   let weekBeam=[{
     day:0, groove:0, favor:cloneFavor(favorStart), value:0,
-    effTransitions:0, days:[], produced:{}, materials:{}, daySignatures:[]
+    effTransitions:0, days:[], produced:{}, materials:{}, daySignatures:[], grooveHistory:[]
   }];
 
   const WEEK_BEAM=48;
@@ -572,7 +599,8 @@ function chooseSchedule(){
           days:[...wk.days,dc.slots],
           produced,
           materials,
-          daySignatures:[...wk.daySignatures,sig]
+          daySignatures:[...wk.daySignatures,sig],
+          grooveHistory:[...wk.grooveHistory,dc.groove]
         });
       }
     }
@@ -590,9 +618,11 @@ function chooseSchedule(){
       if(searchMode()==="standard"){
         // Standard mode: material burden dominates.
         // Value/groove only break ties between similarly easy schedules.
-        const earlyGrooveWeight = day===0 ? 85 : day===1 ? 58 : day===2 ? 38 : 30;
-        const sa = -(burdenA*6.0) + a.value*0.20 + a.groove*earlyGrooveWeight + a.effTransitions*20 - aFeasiblePenalty;
-        const sb = -(burdenB*6.0) + b.value*0.20 + b.groove*earlyGrooveWeight + b.effTransitions*20 - bFeasiblePenalty;
+        const earlyGrooveWeight = day===0 ? 95 : day===1 ? 70 : day===2 ? 45 : 30;
+        const sa = -(burdenA*6.0) + a.value*0.20 + a.groove*earlyGrooveWeight + a.effTransitions*20
+          + grooveTimingScore(a,cap) - aFeasiblePenalty;
+        const sb = -(burdenB*6.0) + b.value*0.20 + b.groove*earlyGrooveWeight + b.effTransitions*20
+          + grooveTimingScore(b,cap) - bFeasiblePenalty;
         return sb-sa;
       }else{
         const sa=a.value + a.groove*120 + a.effTransitions*60 - aFeasiblePenalty;
@@ -614,9 +644,9 @@ function chooseSchedule(){
       if(searchMode()==="standard"){
         const burdenA=practicalBurden(a.materials,a.days);
         const burdenB=practicalBurden(b.materials,b.days);
-        const earlyGrooveWeight = day===0 ? 85 : day===1 ? 58 : day===2 ? 38 : 30;
-        const sa=-(burdenA*6.0)+a.value*0.20+a.groove*earlyGrooveWeight-pa*5000;
-        const sb=-(burdenB*6.0)+b.value*0.20+b.groove*earlyGrooveWeight-pb*5000;
+        const earlyGrooveWeight = day===0 ? 95 : day===1 ? 70 : day===2 ? 45 : 30;
+        const sa=-(burdenA*6.0)+a.value*0.20+a.groove*earlyGrooveWeight+grooveTimingScore(a,cap)-pa*5000;
+        const sb=-(burdenB*6.0)+b.value*0.20+b.groove*earlyGrooveWeight+grooveTimingScore(b,cap)-pb*5000;
         return sb-sa;
       }else{
         const sa=a.value+a.groove*120-pa*5000;
@@ -653,8 +683,11 @@ function chooseSchedule(){
     best=candidates.slice().sort((a,b)=>{
       const burdenA=practicalBurden(a.materials,a.days);
       const burdenB=practicalBurden(b.materials,b.days);
-      if(Math.abs(burdenA-burdenB)>1) return burdenA-burdenB;
-      return b.value-a.value;
+
+      // Material convenience is still primary, but groove timing now matters strongly.
+      const scoreA=-(burdenA*5.0)+grooveTimingScore(a,cap)+a.value*0.18;
+      const scoreB=-(burdenB*5.0)+grooveTimingScore(b,cap)+b.value*0.18;
+      return scoreB-scoreA;
     })[0];
   }
 
