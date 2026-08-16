@@ -11,7 +11,7 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v0.31 α</span>
+      <span class="ver">v0.32 α</span>
     </div>
     <div class="header-actions">
       <button id="generate" class="primary header-generate">⚙ スケジュールを生成</button>
@@ -68,16 +68,16 @@
             </select>
           </div>
 
-          <details id="searchDetails" style="margin-top:8px">
-            <summary style="cursor:pointer;font-weight:700;color:#4d493f">素材使用の目安</summary>
-            <div style="display:grid;grid-template-columns:1fr 72px;gap:6px 8px;align-items:center;margin-top:9px">
+          <div id="searchDetails" style="margin-top:10px">
+            <div style="font-weight:700;color:#4d493f;margin-bottom:9px">素材使用の目安</div>
+            <div style="display:grid;grid-template-columns:1fr 72px;gap:6px 8px;align-items:center">
               <label for="capGather">採集素材</label><input id="capGather" type="number" min="4" max="99" value="25">
               <label for="capCrop">作物素材</label><input id="capCrop" type="number" min="4" max="99" value="20">
               <label for="capAnimal">飼育動物素材</label><input id="capAnimal" type="number" min="4" max="99" value="16">
               <label for="capGranary">グラナリー素材</label><input id="capGranary" type="number" min="4" max="99" value="12">
             </div>
             <div class="small" style="margin-top:7px">標準検索で、この数を超える素材の追加使用をできるだけ避けます。</div>
-          </details>
+          </div>
 
           <div id="generateStatus" class="small" style="margin-top:8px;min-height:18px"></div>
           </div>
