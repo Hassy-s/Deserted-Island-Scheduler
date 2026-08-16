@@ -931,8 +931,11 @@ function renderDay(idx){
       <td class="col-cat">${formatCats(s.item.cats)}</td>
       <td class="col-value value-cell">${s.valueWithGroove.toLocaleString()}</td>
       <td class="col-eff">${s.eff
-        ? `<span class="eff-badge">あわせて生産</span>　やる気 ${s.grooveBefore}→${s.grooveAfter}`
-        : `<span class="eff-none">－</span>　やる気 ${s.grooveAfter}`}</td>
+        ? `<span class="eff-badge">あわせて生産</span>`
+        : `<span class="eff-none">－</span>`}</td>
+      <td class="col-groove">${s.eff
+        ? `${s.grooveBefore}→${s.grooveAfter}`
+        : `${s.grooveAfter}`}</td>
     </tr>`
   }).join("");
   $("#tabs").querySelectorAll("button").forEach((b,i)=>b.classList.toggle("active",i===idx))

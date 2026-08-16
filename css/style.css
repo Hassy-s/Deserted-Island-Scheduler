@@ -505,3 +505,29 @@ button:disabled{opacity:.65;cursor:wait}
   opacity:.68;
   white-space:nowrap;
 }
+
+
+/* v1.0 final: あわせて生産 / やる気を独立列に */
+.schedule-table .col-value{
+  width:105px;
+  min-width:105px;
+  max-width:105px;
+  text-align:right;
+}
+.schedule-table .col-eff{
+  width:135px;
+  min-width:135px;
+  max-width:135px;
+  text-align:center;
+  white-space:nowrap;
+}
+.schedule-table .col-groove{
+  width:100px;
+  min-width:100px;
+  max-width:100px;
+  text-align:center;
+  white-space:nowrap;
+}
+.schedule-table .eff-badge{
+  margin:0;
+}
