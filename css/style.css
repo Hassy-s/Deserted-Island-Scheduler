@@ -448,6 +448,11 @@ button:disabled{opacity:.65;cursor:wait}
 }
 .search-panel details[open] .search-summary::after{content:"－"}
 
+
+.materialcheck{
+  grid-template-columns:24px minmax(0,1fr) auto;
+}
+
 @media(max-width:520px){
   .exclude-head-compact{align-items:flex-start;flex-direction:column}
 }

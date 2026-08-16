@@ -2,7 +2,7 @@
 
 // 4h / 6h / 8h product names cross-checked against user-provided in-game lists (v0.19).
 const STORAGE_KEY="island_workshop_scheduler_v019";
-const PREVIOUS_STORAGE_KEYS=["island_workshop_scheduler_v018"];
+const PREVIOUS_STORAGE_KEYS=["island_workshop_scheduler_v029","island_workshop_scheduler_v028","island_workshop_scheduler_v018"];
 const HISTORY_KEY="island_workshop_scheduler_history_v1";
 
 function loadHistory(){
@@ -40,16 +40,19 @@ function historyMaterialPenalty(item,workshops){
   return p;
 }
 
-let excluded=new Set(), LAST=null, activeDay=0;
+let excludedMaterials=new Set(), LAST=null, activeDay=0;
 const $=s=>document.querySelector(s);
 const collator=new Intl.Collator("ja");
 const intersects=(a,b)=>a.some(x=>b.includes(x));
 const efficient=(a,b)=>a&&b&&a.id!==b.id&&intersects(a.cats,b.cats);
 
 function autoWorkshops(rank){return rank>=15?4:rank>=5?3:2}
+function itemUsesExcludedMaterial(item){
+  return (item.materials||[]).some(m=>excludedMaterials.has(m.name));
+}
 function available(){
   const rank=+$("#rank").value;
-  return ITEMS.filter(i=>i.rank<=rank&&!excluded.has(i.id))
+  return ITEMS.filter(i=>i.rank<=rank&&!itemUsesExcludedMaterial(i))
 }
 function favorEnabled(){return $("#favorOn").checked}
 function fillFavorSelects(){
@@ -57,7 +60,7 @@ function fillFavorSelects(){
   for(const t of [4,6,8]){
     const sel=$("#favor"+t), old=sel.value;
     sel.innerHTML='<option value="">---- 選択してください ----</option>';
-    ITEMS.filter(i=>i.time===t&&i.rank<=rank&&!excluded.has(i.id))
+    ITEMS.filter(i=>i.time===t&&i.rank<=rank&&!itemUsesExcludedMaterial(i))
       .sort((a,b)=>collator.compare(a.name,b.name))
       .forEach(i=>{
         const o=document.createElement("option");
@@ -71,7 +74,7 @@ function save(){
     rank:+$("#rank").value,
     workshops:+$("#workshops").value,
     landmarks:+$("#landmarks").value,
-    excluded:[...excluded],
+    excludedMaterials:[...excludedMaterials],
     favor:favorEnabled(),
     searchMode:searchMode(),
     capGather:+$("#capGather").value,
@@ -93,7 +96,7 @@ function load(){
     if(s.rank)$("#rank").value=s.rank;
     if(s.workshops)$("#workshops").value=s.workshops;
     if(s.landmarks)$("#landmarks").value=s.landmarks;
-    excluded=new Set(s.excluded||[]);
+    excludedMaterials=new Set(s.excludedMaterials||[]);
     $("#favorOn").checked=!!s.favor;
     $("#favorOff").checked=!s.favor;
     $("#favors").classList.toggle("on",!!s.favor);
@@ -110,28 +113,48 @@ function load(){
   renderExclude();
   updateExcludeSummary()
 }
+function allMaterials(){
+  const rank=+$("#rank").value;
+  const map=new Map();
+
+  // Only show materials relevant to products currently unlocked at this rank.
+  for(const item of ITEMS.filter(i=>i.rank<=rank)){
+    for(const m of (item.materials||[])){
+      if(!map.has(m.name)){
+        map.set(m.name,{
+          name:m.name,
+          type:materialType(m.name)
+        });
+      }
+    }
+  }
+
+  return [...map.values()].sort((a,b)=>collator.compare(a.name,b.name));
+}
+function materialTypeLabel(t){
+  return t==="rare"?"グラナリー":t==="animal"?"飼育動物":t==="crop"?"作物":"採集";
+}
 function updateExcludeSummary(){
-  $("#excludeSummary").textContent=`除外：${excluded.size}件 / 現在使用可能：${available().length}品`
+  const blocked=ITEMS.filter(itemUsesExcludedMaterial).length;
+  $("#excludeSummary").textContent=`除外素材：${excludedMaterials.size}件 / 対象外になる島産品：${blocked}品 / 現在使用可能：${available().length}品`;
 }
 function renderExclude(){
   const q=$("#filter").value.trim(),grid=$("#itemGrid");
   grid.innerHTML="";
-  ITEMS.slice().sort((a,b)=>collator.compare(a.name,b.name))
-    .filter(i=>!q||i.name.includes(q))
-    .forEach(i=>{
+  allMaterials()
+    .filter(m=>!q||m.name.includes(q))
+    .forEach(m=>{
       const d=document.createElement("label");
-      d.className="itemcheck";
+      d.className="itemcheck materialcheck";
       d.innerHTML=`
-        <input type="checkbox" ${excluded.has(i.id)?"checked":""} data-id="${i.id}">
-        <span class="iname">${i.name}</span>
-        <span class="pill">${i.time}時間</span>
-        <span class="pill">Rank ${i.rank}</span>
-        <span class="pill">${i.cats.join(" / ")}</span>`;
+        <input type="checkbox" ${excludedMaterials.has(m.name)?"checked":""} data-name="${m.name}">
+        <span class="iname">${m.name}</span>
+        <span class="pill">${materialTypeLabel(m.type)}</span>`;
       grid.appendChild(d)
     });
   grid.querySelectorAll("input").forEach(cb=>cb.onchange=()=>{
-    const id=+cb.dataset.id;
-    cb.checked?excluded.add(id):excluded.delete(id);
+    const name=cb.dataset.name;
+    cb.checked?excludedMaterials.add(name):excludedMaterials.delete(name);
     updateExcludeSummary();fillFavorSelects();save()
   })
 }
@@ -472,7 +495,12 @@ function chooseSchedule(){
       const id=+$("#favor"+t).value;
       if(!id) throw new Error(`${t}時間品のお願いを選択してください。`);
       const item=ITEMS.find(x=>x.id===id);
-      if(!item || !avail.some(x=>x.id===id)) throw new Error(`${t}時間品が現在の条件では使用できません。`);
+      if(!item) throw new Error(`${t}時間品が現在の条件では使用できません。`);
+      if(itemUsesExcludedMaterial(item)){
+        const names=(item.materials||[]).filter(m=>excludedMaterials.has(m.name)).map(m=>m.name).join("、");
+        throw new Error(`ねこみみさんのおねがいの${t}時間品に、除外した素材（${names}）が含まれています。`);
+      }
+      if(!avail.some(x=>x.id===id)) throw new Error(`${t}時間品が現在の条件では使用できません。`);
       favorStart[id]=n;
       targets.push(id);
     }
@@ -734,7 +762,15 @@ function render(){
 
 $("#rank").addEventListener("change",()=>{
   $("#workshops").value=autoWorkshops(+$("#rank").value);
-  fillFavorSelects();updateExcludeSummary();save()
+
+  // Drop exclusions for materials that are no longer relevant at the selected rank.
+  const visibleNames=new Set(allMaterials().map(m=>m.name));
+  excludedMaterials=new Set([...excludedMaterials].filter(name=>visibleNames.has(name)));
+
+  renderExclude();
+  fillFavorSelects();
+  updateExcludeSummary();
+  save();
 });
 $("#workshops").addEventListener("change",save);
 $("#landmarks").addEventListener("change",save);
@@ -748,8 +784,8 @@ $("#favorOff").addEventListener("change",()=>{
 $("#searchModeSelect").addEventListener("change",save);
 ["#capGather","#capCrop","#capAnimal","#capGranary"].forEach(sel=>$(sel).addEventListener("change",save));
 $("#filter").oninput=renderExclude;
-$("#allOn").onclick=()=>{ITEMS.forEach(i=>excluded.add(i.id));renderExclude();updateExcludeSummary();fillFavorSelects();save()};
-$("#allOff").onclick=()=>{excluded.clear();renderExclude();updateExcludeSummary();fillFavorSelects();save()};
+$("#allOn").onclick=()=>{allMaterials().forEach(m=>excludedMaterials.add(m.name));renderExclude();updateExcludeSummary();fillFavorSelects();save()};
+$("#allOff").onclick=()=>{excludedMaterials.clear();renderExclude();updateExcludeSummary();fillFavorSelects();save()};
 $("#confirmWeek").onclick=()=>{
   if(!LAST || !LAST.materials){
     $("#historyStatus").textContent="先にスケジュールを生成してください。";
@@ -806,7 +842,7 @@ $("#generate").onclick=()=>{
 };
 $("#saveBtn").onclick=()=>{save();alert("設定を保存しました。")};
 $("#reset").onclick=()=>{
-  localStorage.removeItem(STORAGE_KEY);excluded.clear();
+  localStorage.removeItem(STORAGE_KEY);excludedMaterials.clear();
   $("#rank").value=5;$("#workshops").value=3;$("#landmarks").value=2;
   $("#favorOff").checked=true;$("#favorOn").checked=false;$("#favors").classList.remove("on");$("#searchModeSelect").value="standard";$("#capGather").value=25;$("#capCrop").value=20;$("#capAnimal").value=16;$("#capGranary").value=12;
   fillFavorSelects();renderExclude();updateExcludeSummary();
