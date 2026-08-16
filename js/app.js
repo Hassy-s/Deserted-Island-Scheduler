@@ -329,7 +329,24 @@ function practicalBurden(materials,days){
   // If an 8h craft uses easy/old materials, it is allowed naturally.
   return materialBurden(materials);
 }
-function candidateBaseScore(item, prev, grooveAfter, favorRemaining, currentMaterials, workshops){
+
+function earlyGrooveBonus(dayIndex, isEff, grooveBefore, grooveAfter, grooveCapValue){
+  if(!isEff || grooveAfter<=grooveBefore) return 0;
+
+  // Early groove has more future crafts to benefit from.
+  // Day 1 is strongest, Day 2 medium, Day 3 light, Days 4-5 no extra bonus.
+  const dayWeight = [115, 65, 22, 0, 0][dayIndex] ?? 0;
+  const gained = grooveAfter-grooveBefore;
+
+  // While far from cap, gaining groove is especially useful.
+  const remainingRatio = grooveCapValue>0
+    ? Math.max(0,(grooveCapValue-grooveBefore)/grooveCapValue)
+    : 0;
+
+  return dayWeight * gained * (0.75 + remainingRatio*0.25);
+}
+
+function candidateBaseScore(item, prev, grooveAfter, favorRemaining, currentMaterials, workshops, dayIndex=0, grooveBefore=0, grooveCapValue=0){
   let score = (item.value / item.time) * 12;
   const eff = efficient(prev,item);
   if(eff) score += 500;
@@ -350,6 +367,15 @@ function candidateBaseScore(item, prev, grooveAfter, favorRemaining, currentMate
   // Cross-week rotation: recent material use is only a gentle tie-breaker.
   // It never acts as a ban and is much weaker than this week's material limits.
   score -= historyMaterialPenalty(item,workshops);
+
+  // v0.33: build groove earlier in the week without overriding material limits.
+  score += earlyGrooveBonus(
+    dayIndex,
+    efficient(prev,item),
+    grooveBefore,
+    grooveAfter,
+    grooveCapValue
+  );
 
   return score;
 }
@@ -372,7 +398,7 @@ function favorPenalty(favor){
   for(const k in favor) miss += favor[k];
   return miss;
 }
-function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterials={}, beamWidth=180){
+function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterials={}, beamWidth=180, dayIndex=0){
   // Beam-search all 24h sequences. State contains time, prev, groove, favor remaining and value.
   let beam=[{
     time:0, prev:null, groove:startGroove, favor:cloneFavor(startFavor),
@@ -402,7 +428,7 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
         const grooveAfter=isEff?Math.min(cap,st.groove+workshops):st.groove;
         return {
           item,
-          rank:candidateBaseScore(item,st.prev,grooveAfter,st.favor,st.materials,workshops),
+          rank:candidateBaseScore(item,st.prev,grooveAfter,st.favor,st.materials,workshops,dayIndex,st.groove,cap),
           overCap:wouldExceedStandardCap(st.materials,item,workshops)
         };
       }).sort((a,b)=>b.rank-a.rank);
@@ -517,7 +543,7 @@ function chooseSchedule(){
   for(let day=0;day<5;day++){
     let next=[];
     for(const wk of weekBeam){
-      const dayCandidates=daySearch(avail,workshops,cap,wk.groove,wk.favor,wk.materials,90);
+      const dayCandidates=daySearch(avail,workshops,cap,wk.groove,wk.favor,wk.materials,90,day);
 
       for(const dc of dayCandidates.slice(0,16)){
         const produced={...wk.produced};
@@ -564,8 +590,9 @@ function chooseSchedule(){
       if(searchMode()==="standard"){
         // Standard mode: material burden dominates.
         // Value/groove only break ties between similarly easy schedules.
-        const sa = -(burdenA*6.0) + a.value*0.20 + a.groove*30 + a.effTransitions*20 - aFeasiblePenalty;
-        const sb = -(burdenB*6.0) + b.value*0.20 + b.groove*30 + b.effTransitions*20 - bFeasiblePenalty;
+        const earlyGrooveWeight = day===0 ? 85 : day===1 ? 58 : day===2 ? 38 : 30;
+        const sa = -(burdenA*6.0) + a.value*0.20 + a.groove*earlyGrooveWeight + a.effTransitions*20 - aFeasiblePenalty;
+        const sb = -(burdenB*6.0) + b.value*0.20 + b.groove*earlyGrooveWeight + b.effTransitions*20 - bFeasiblePenalty;
         return sb-sa;
       }else{
         const sa=a.value + a.groove*120 + a.effTransitions*60 - aFeasiblePenalty;
@@ -587,8 +614,9 @@ function chooseSchedule(){
       if(searchMode()==="standard"){
         const burdenA=practicalBurden(a.materials,a.days);
         const burdenB=practicalBurden(b.materials,b.days);
-        const sa=-(burdenA*6.0)+a.value*0.20+a.groove*30-pa*5000;
-        const sb=-(burdenB*6.0)+b.value*0.20+b.groove*30-pb*5000;
+        const earlyGrooveWeight = day===0 ? 85 : day===1 ? 58 : day===2 ? 38 : 30;
+        const sa=-(burdenA*6.0)+a.value*0.20+a.groove*earlyGrooveWeight-pa*5000;
+        const sb=-(burdenB*6.0)+b.value*0.20+b.groove*earlyGrooveWeight-pb*5000;
         return sb-sa;
       }else{
         const sa=a.value+a.groove*120-pa*5000;
