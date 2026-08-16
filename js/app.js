@@ -401,7 +401,47 @@ function favorPenalty(favor){
   for(const k in favor) miss += favor[k];
   return miss;
 }
+
+const DAY_SEARCH_CACHE=new Map();
+
+function compactMaterialKey(materials){
+  // Small deterministic key for cache lookup.
+  return Object.entries(materials||{})
+    .filter(([,q])=>q>0)
+    .map(([n,q])=>`${MATERIAL_INDEX[n]??n}:${q}`)
+    .sort()
+    .join(".");
+}
+
+function daySearchCacheKey(avail,workshops,cap,startGroove,startFavor,startMaterials,beamWidth,dayIndex){
+  // available items are stable for a generation run; include ids so exclusions/rank stay safe.
+  const availKey=avail.map(i=>i.id).join(",");
+  return [
+    dayIndex,workshops,cap,startGroove,beamWidth,
+    favorKey(startFavor||{}),
+    compactMaterialKey(startMaterials||{}),
+    availKey
+  ].join("|");
+}
+
+function cloneDayCandidates(rows){
+  // Search results are treated as immutable by the weekly layer, shallow cloning is enough.
+  return rows.map(r=>({
+    ...r,
+    favor:cloneFavor(r.favor),
+    materials:{...(r.materials||{})},
+    dayMaterials:{...(r.dayMaterials||{})},
+    slots:[...(r.slots||[])]
+  }));
+}
+
 function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterials={}, beamWidth=180, dayIndex=0){
+  const cacheKey=daySearchCacheKey(
+    avail,workshops,cap,startGroove,startFavor,startMaterials,beamWidth,dayIndex
+  );
+  const cached=DAY_SEARCH_CACHE.get(cacheKey);
+  if(cached) return cloneDayCandidates(cached);
+
   // Beam-search all 24h sequences. State contains time, prev, groove, favor remaining and value.
   let beam=[{
     time:0, prev:null, groove:startGroove, favor:cloneFavor(startFavor),
@@ -503,7 +543,18 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
       const matLoad=Math.round(materialBurden(st.materials||{})/120);
       const key=`${st.time}|${st.prev?st.prev.id:0}|${st.groove}|${favorKey(st.favor)}|${matLoad}`;
       const old=bestByKey.get(key);
-      if(!old || st.value>old.value) bestByKey.set(key,st);
+      if(!old){
+        bestByKey.set(key,st);
+      }else{
+        const stBurden=materialBurden(st.materials||{});
+        const oldBurden=materialBurden(old.materials||{});
+        const dominates =
+          (st.value>=old.value && stBurden<=oldBurden) &&
+          (st.value>old.value || stBurden<oldBurden);
+        if(dominates || (st.value>old.value && stBurden<=oldBurden*1.03)){
+          bestByKey.set(key,st);
+        }
+      }
     }
 
     beam=[...bestByKey.values()].sort((a,b)=>{
@@ -517,7 +568,7 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
     if(beam.every(x=>x.time===24)) break;
   }
 
-  return beam.filter(x=>x.time===24).sort((a,b)=>{
+  const result=beam.filter(x=>x.time===24).sort((a,b)=>{
     const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
     if(pa!==pb) return pa-pb;
     if(searchMode()==="standard"){
@@ -526,6 +577,9 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
     }
     return b.value-a.value;
   }).slice(0,24);
+
+  DAY_SEARCH_CACHE.set(cacheKey,cloneDayCandidates(result));
+  return result;
 }
 
 
@@ -826,7 +880,7 @@ function renderDay(idx){
   $("#dayTitle").textContent=`${idx+1}日目の工房スケジュール（全工房共通）`;
   $("#scheduleBody").innerHTML=slots.map((s,i)=>{
     const isTarget=LAST.targets.includes(s.item.id);
-    return `<tr>
+    return `<tr class="${s.eff?'efficient-row':''}">
       <td class="col-no"><div class="no-circle">${i+1}</div></td>
       <td class="col-name"><span class="item-name">${s.item.name}</span>${isTarget?'<span class="target-mini">お願い</span>':""}</td>
       <td class="col-time">${s.item.time}時間</td>
@@ -834,8 +888,8 @@ function renderDay(idx){
       <td class="col-cat">${formatCats(s.item.cats)}</td>
       <td class="col-value value-cell">${s.valueWithGroove.toLocaleString()}</td>
       <td class="col-eff">${s.eff
-        ? `<span class="eff-yes">○</span>　やる気 ${s.grooveBefore}→${s.grooveAfter}`
-        : `<span class="eff-no">－</span>　やる気 ${s.grooveAfter}`}</td>
+        ? `<span class="eff-badge">あわせて生産</span>　やる気 ${s.grooveBefore}→${s.grooveAfter}`
+        : `<span class="eff-none">－</span>　やる気 ${s.grooveAfter}`}</td>
     </tr>`
   }).join("");
   $("#tabs").querySelectorAll("button").forEach((b,i)=>b.classList.toggle("active",i===idx))
@@ -904,6 +958,7 @@ function renderMaterials(){
   }).join("");
 }
 function render(){
+  DAY_SEARCH_CACHE.clear();
   try{LAST=chooseSchedule()}
   catch(e){
     $("#scheduleBody").innerHTML=`<tr><td colspan="7" style="text-align:center;color:#b94d4d;padding:30px">${e.message}</td></tr>`;
