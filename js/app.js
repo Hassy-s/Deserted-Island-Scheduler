@@ -538,50 +538,9 @@ function favorPlacementBias(item, favorRemaining, dayIndex, groove, cap){
 }
 
 
-function representativeValuePerHour(avail){
-  if(!avail?.length) return 0;
-
-  // Use the stronger half of currently available products rather than one extreme item.
-  const rates=avail
-    .map(i=>i.value/i.time)
-    .sort((a,b)=>b-a);
-
-  const take=Math.max(1,Math.ceil(rates.length/2));
-  const sample=rates.slice(0,take);
-  return sample.reduce((a,b)=>a+b,0)/sample.length;
-}
-
-function futureGrooveROI(groove, completedDays, avail, workshops){
-  if(groove<=0 || completedDays>=5) return 0;
-
-  // Groove is a percentage bonus on later production.
-  // Estimate how much value the current groove can still create over the
-  // remaining days. This is deliberately an estimate used for beam pruning;
-  // final schedules still use their actually calculated weekly value.
-  const remainingDays=5-completedDays;
-  const remainingHours=remainingDays*24;
-  const rate=representativeValuePerHour(avail);
-
-  // Efficient production is common but not guaranteed. 1.45 is a conservative
-  // average quantity factor between normal (x1) and efficient (x2) production.
-  const estimatedBase=rate*remainingHours*workshops*1.45;
-  return estimatedBase*(groove/100);
-}
-
-function early48Score(wk, completedDays, avail, workshops, cap){
-  if(completedDays>2) return 0;
-
-  // Days 1-2 are treated as one 48h investment window:
-  // actual revenue already earned + estimated future revenue unlocked by groove.
-  // No craft duration is forced.
-  const roi=futureGrooveROI(wk.groove,completedDays,avail,workshops);
-
-  // A small timing preference favors getting the same groove sooner, but does
-  // not overpower a clearly better 6h/8h revenue choice.
-  const timing=grooveTimingScore(wk,cap)*0.18;
-
-  return roi+timing;
-}
+function representativeValuePerHour(avail){ return 0; }
+function futureGrooveROI(groove, completedDays, avail, workshops){ return 0; }
+function early48Score(wk, completedDays, avail, workshops, cap){ return 0; }
 
 function grooveTimingScore(wk, grooveCapValue){
   if(searchMode()!=="standard") return 0;
@@ -607,6 +566,64 @@ function grooveTimingScore(wk, grooveCapValue){
     score += g*carryWeight;
   }
   return score;
+}
+
+
+function materialStateBurdenForBeam(wk){
+  return practicalBurden(wk.materials||{},wk.days||[]);
+}
+
+function mergeUniqueWeeks(groups, limit){
+  const seen=new Set();
+  const out=[];
+  for(const group of groups){
+    for(const wk of group){
+      const matBucket=Math.round(materialStateBurdenForBeam(wk)/150);
+      const valueBucket=Math.round(wk.value/400);
+      const key=`${wk.groove}|${favorKey(wk.favor)}|${valueBucket}|${matBucket}|${wk.daySignatures?.join("/")||""}`;
+      if(seen.has(key)) continue;
+      seen.add(key);
+      out.push(wk);
+      if(out.length>=limit) return out;
+    }
+  }
+  return out;
+}
+
+function preserveEarlyWeekDiversity(weeks, dayIndex, cap){
+  // During days 1-2, do NOT let one objective dominate.
+  // Keep:
+  //  - high actual value branches
+  //  - high groove branches
+  //  - low material burden branches
+  //  - balanced branches
+  // Then all of them are allowed to continue through days 3-5.
+  if(dayIndex>1) return weeks;
+
+  const byValue=weeks.slice().sort((a,b)=>b.value-a.value);
+  const byGroove=weeks.slice().sort((a,b)=>{
+    if(b.groove!==a.groove) return b.groove-a.groove;
+    return b.value-a.value;
+  });
+  const byMaterial=weeks.slice().sort((a,b)=>{
+    const ba=materialStateBurdenForBeam(a);
+    const bb=materialStateBurdenForBeam(b);
+    if(ba!==bb) return ba-bb;
+    return b.value-a.value;
+  });
+  const byBalanced=weeks.slice().sort((a,b)=>{
+    const sa=a.value + a.groove*180 - materialStateBurdenForBeam(a)*2.2;
+    const sb=b.value + b.groove*180 - materialStateBurdenForBeam(b)*2.2;
+    return sb-sa;
+  });
+
+  // Larger early beam, but composed of different kinds of good candidates.
+  return mergeUniqueWeeks([
+    byValue.slice(0,40),
+    byGroove.slice(0,40),
+    byMaterial.slice(0,40),
+    byBalanced.slice(0,50)
+  ],130);
 }
 
 function chooseSchedule(){
@@ -640,7 +657,7 @@ function chooseSchedule(){
     effTransitions:0, days:[], produced:{}, materials:{}, daySignatures:[], grooveHistory:[]
   }];
 
-  const WEEK_BEAM=72;
+  const WEEK_BEAM=130;
 
   for(let day=0;day<5;day++){
     let next=[];
@@ -693,49 +710,56 @@ function chooseSchedule(){
       if(searchMode()==="standard"){
         // Standard mode: material burden dominates.
         // Value/groove only break ties between similarly easy schedules.
-        const completedDays=day+1;
-        const earlyA=early48Score(a,completedDays,avail,workshops,cap);
-        const earlyB=early48Score(b,completedDays,avail,workshops,cap);
-
-        const sa = -(burdenA*6.0) + a.value*0.23 + earlyA + a.effTransitions*12 - aFeasiblePenalty;
-        const sb = -(burdenB*6.0) + b.value*0.23 + earlyB + b.effTransitions*12 - bFeasiblePenalty;
+        const sa = -(burdenA*4.5) + a.value*0.24 + a.groove*70 + a.effTransitions*12 - aFeasiblePenalty;
+        const sb = -(burdenB*4.5) + b.value*0.24 + b.groove*70 + b.effTransitions*12 - bFeasiblePenalty;
         return sb-sa;
       }else{
-        const completedDays=day+1;
-        const sa=a.value + early48Score(a,completedDays,avail,workshops,cap) + a.effTransitions*35 - aFeasiblePenalty;
-        const sb=b.value + early48Score(b,completedDays,avail,workshops,cap) + b.effTransitions*35 - bFeasiblePenalty;
+        const sa=a.value + a.groove*95 + a.effTransitions*30 - aFeasiblePenalty;
+        const sb=b.value + b.groove*95 + b.effTransitions*30 - bFeasiblePenalty;
         return sb-sa;
       }
     });
 
-    // Deduplicate similar weekly states.
-    const dedup=new Map();
-    for(const wk of next){
-      const valueBucket = day<=1 ? Math.round(wk.value/500) : 0;
-      const key=`${wk.groove}|${favorKey(wk.favor)}|${valueBucket}`;
-      const old=dedup.get(key);
-      if(!old || wk.value>old.value) dedup.set(key,wk);
-    }
-    weekBeam=[...dedup.values()].sort((a,b)=>{
-      const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
-      if(day===4 && pa!==pb) return pa-pb;
-      if(searchMode()==="standard"){
-        const burdenA=practicalBurden(a.materials,a.days);
-        const burdenB=practicalBurden(b.materials,b.days);
-        const completedDays=day+1;
-        const earlyA=early48Score(a,completedDays,avail,workshops,cap);
-        const earlyB=early48Score(b,completedDays,avail,workshops,cap);
+    // v0.37:
+    // For the first 48h, preserve multiple trade-offs instead of collapsing
+    // them to one "best-looking" intermediate state.
+    if(day<=1){
+      weekBeam=preserveEarlyWeekDiversity(next,day,cap);
+    }else{
+      // After the 48h investment window, keep a broader but conventional beam.
+      const dedup=new Map();
+      for(const wk of next){
+        const matBucket=Math.round(materialStateBurdenForBeam(wk)/200);
+        const valueBucket=Math.round(wk.value/500);
+        const key=`${wk.groove}|${favorKey(wk.favor)}|${valueBucket}|${matBucket}`;
+        const old=dedup.get(key);
 
-        const sa=-(burdenA*6.0)+a.value*0.23+earlyA-pa*5000;
-        const sb=-(burdenB*6.0)+b.value*0.23+earlyB-pb*5000;
-        return sb-sa;
-      }else{
-        const completedDays=day+1;
-        const sa=a.value+early48Score(a,completedDays,avail,workshops,cap)-pa*5000;
-        const sb=b.value+early48Score(b,completedDays,avail,workshops,cap)-pb*5000;
-        return sb-sa;
+        if(!old){
+          dedup.set(key,wk);
+          continue;
+        }
+
+        if(searchMode()==="standard"){
+          const oldScore=old.value-materialStateBurdenForBeam(old)*3.5;
+          const newScore=wk.value-materialStateBurdenForBeam(wk)*3.5;
+          if(newScore>oldScore) dedup.set(key,wk);
+        }else{
+          if(wk.value>old.value) dedup.set(key,wk);
+        }
       }
-    }).slice(0,WEEK_BEAM);
+
+      weekBeam=[...dedup.values()].sort((a,b)=>{
+        const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
+        if(day===4 && pa!==pb) return pa-pb;
+
+        if(searchMode()==="standard"){
+          const sa=a.value-materialStateBurdenForBeam(a)*3.5;
+          const sb=b.value-materialStateBurdenForBeam(b)*3.5;
+          return sb-sa;
+        }
+        return b.value-a.value;
+      }).slice(0,WEEK_BEAM);
+    }
   }
 
   if(!weekBeam.length) throw new Error("現在の条件では5日分のスケジュールを生成できません。");
@@ -766,9 +790,10 @@ function chooseSchedule(){
       const burdenA=practicalBurden(a.materials,a.days);
       const burdenB=practicalBurden(b.materials,b.days);
 
-      // Material convenience is still primary, but groove timing now matters strongly.
-      const scoreA=-(burdenA*5.0)+grooveTimingScore(a,cap)+a.value*0.18;
-      const scoreB=-(burdenB*5.0)+grooveTimingScore(b,cap)+b.value*0.18;
+      // Final decision uses the actually calculated five-day value.
+      // No future-value estimate is used here.
+      const scoreA=a.value-burdenA*3.5;
+      const scoreB=b.value-burdenB*3.5;
       return scoreB-scoreA;
     })[0];
   }
