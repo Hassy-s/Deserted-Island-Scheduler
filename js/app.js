@@ -368,7 +368,7 @@ function candidateBaseScore(item, prev, grooveAfter, favorRemaining, currentMate
   // It never acts as a ban and is much weaker than this week's material limits.
   score -= historyMaterialPenalty(item,workshops);
 
-  // v0.33: build groove earlier in the week without overriding material limits.
+  // Early groove remains valuable, but v0.35 also uses explicit weekly phases.
   score += earlyGrooveBonus(
     dayIndex,
     efficient(prev,item),
@@ -376,6 +376,9 @@ function candidateBaseScore(item, prev, grooveAfter, favorRemaining, currentMate
     grooveAfter,
     grooveCapValue
   );
+
+  score += phaseItemBias(item,prev,dayIndex,grooveBefore,grooveCapValue);
+  score += favorPlacementBias(item,favorRemaining,dayIndex,grooveBefore,grooveCapValue);
 
   return score;
 }
@@ -508,14 +511,66 @@ function daySignature(slots){
   return (slots||[]).map(s=>s.item.id).join("-");
 }
 
+
+function growthPhase(dayIndex, groove, cap){
+  if(groove>=cap) return "profit";
+  if(dayIndex<=1) return "growth";
+  if(dayIndex===2) return "transition";
+  return "profit";
+}
+
+function phaseItemBias(item, prev, dayIndex, groove, cap){
+  if(searchMode()==="max") {
+    // Max mode still values early groove, but may choose longer crafts if total value wins.
+  }
+
+  const phase=growthPhase(dayIndex,groove,cap);
+  const isEff=efficient(prev,item);
+
+  if(phase==="growth"){
+    // Days 1-2: strongly prefer 4h chains and especially efficient transitions.
+    let score = item.time===4 ? 620 : item.time===6 ? -180 : -420;
+    if(isEff) score += 720;
+    return score;
+  }
+
+  if(phase==="transition"){
+    // Day 3: finish groove, then naturally move toward higher-value crafts.
+    let score = 0;
+    if(groove<cap && isEff) score += 320;
+    if(groove<cap && item.time===4) score += 160;
+    return score;
+  }
+
+  return 0;
+}
+
+function favorPlacementBias(item, favorRemaining, dayIndex, groove, cap){
+  if(!favorEnabled() || !favorRemaining?.[item.id]) return 0;
+
+  const phase=growthPhase(dayIndex,groove,cap);
+
+  // 4h favor items fit naturally into the growth chain.
+  if(phase==="growth" && item.time===4) return 420;
+
+  // Prefer postponing 6h/8h favor items until the high-groove phase when feasible.
+  if(phase==="growth" && item.time===6) return -160;
+  if(phase==="growth" && item.time===8) return -300;
+
+  // Once groove is high, favor fulfillment is welcome.
+  if(phase==="profit") return 260;
+
+  return 0;
+}
+
 function grooveTimingScore(wk, grooveCapValue){
   if(searchMode()!=="standard") return 0;
   const h=wk.grooveHistory||[];
   if(!h.length || grooveCapValue<=0) return 0;
 
-  // Desired end-of-day progression:
-  // Day1 ~45%, Day2 ~85%, Day3 100%.
-  const targets=[0.45,0.85,1.00,1.00,1.00];
+  // Desired end-of-day progression for the phase algorithm:
+  // Day1 ~45%, Day2 ~90%, Day3 100%.
+  const targets=[0.45,0.90,1.00,1.00,1.00];
 
   let score=0;
   for(let d=0;d<h.length;d++){
@@ -524,11 +579,11 @@ function grooveTimingScore(wk, grooveCapValue){
     const deficit=Math.max(0,target-g);
 
     // Missing an early target is costly because later crafts lose the groove bonus.
-    const deficitWeight=[220,260,300,80,20][d]||0;
+    const deficitWeight=[360,520,620,100,20][d]||0;
     score -= deficit*deficitWeight;
 
     // Earlier groove gets additional positive value.
-    const carryWeight=[150,110,65,25,5][d]||0;
+    const carryWeight=[220,170,80,25,5][d]||0;
     score += g*carryWeight;
   }
   return score;
