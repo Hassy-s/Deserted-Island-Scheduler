@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>無人島工房スケジューラー</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div style="display:flex;align-items:center;gap:10px;min-width:0">
+      <h1>🏝️ 無人島工房スケジューラー</h1>
+      <span class="ver">v0.23 α</span>
+    </div>
+    <div class="header-actions">
+      <button id="generate" class="primary header-generate">⚙ スケジュールを生成</button>
+      <button id="saveBtn" class="olive">設定を保存</button>
+      <button id="reset" class="secondary">設定をリセット</button>
+    </div>
+  </div>
+  <div class="small" style="margin:-4px 0 12px 4px">※ ゲーム内の需要・人気度は考慮せず、島産品の基本価値と週間の素材負担をもとに計算しています。「今週分を確定」すると素材の使用履歴が保存され、次週以降は使用素材が偏りにくくなります。</div>
+
+  <div class="layout">
+    <aside>
+      
+
+      <section class="panel">
+        <div class="panel-title">進行度・設定</div>
+        <div class="panel-body">
+          <div class="form-row">
+            <label>開拓ランク</label>
+            <input id="rank" type="number" min="3" max="20" value="5">
+          </div>
+          <div class="form-row">
+            <label>工房の数</label>
+            <select id="workshops">
+              <option>2</option><option selected>3</option><option>4</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>ランドマーク数</label>
+            <select id="landmarks">
+              <option value="1">1（やる気上限15）</option>
+              <option value="2" selected>2（やる気上限20）</option>
+              <option value="3">3（やる気上限25）</option>
+              <option value="4">4（やる気上限35）</option>
+              <option value="5">5（やる気上限45）</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">除外設定</div>
+        <div class="panel-body">
+          <div class="exclude-head exclude-head-compact">
+            <div class="exclude-title">使いたくない島産品</div>
+            <div class="exclude-actions">
+              <button class="secondary" id="allOn">すべて除外</button>
+              <button class="secondary" id="allOff">除外をすべて解除</button>
+            </div>
+          </div>
+          <input id="filter" type="text" placeholder="島産品名を検索">
+          <div id="itemGrid" class="exclude-box" style="margin-top:8px"></div>
+          <div id="excludeSummary" class="small" style="margin-top:7px"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">ねこみみさんのおねがい</div>
+        <div class="panel-body">
+          <div class="toggle-row">
+            <label><input type="radio" name="favorMode" id="favorOff" checked> 使用しない</label>
+            <label><input type="radio" name="favorMode" id="favorOn"> 使用する</label>
+          </div>
+          <div id="favors" class="favors">
+            <div class="form-row"><label>4時間品</label><select id="favor4"></select></div>
+            <div class="form-row"><label>6時間品</label><select id="favor6"></select></div>
+            <div class="form-row"><label>8時間品</label><select id="favor8"></select></div>
+          </div>
+        </div>
+      </section>
+
+      
+
+      
+      <section class="panel">
+        <div class="panel-title">検索設定</div>
+        <div class="small" style="padding:0 14px 8px">標準では今週の素材分散を優先し、確定済みの直近数週間で多く使った素材は少しだけ選ばれにくくなります。</div>
+        <div class="panel-body">
+          <div class="form-row">
+            <label>検索モード</label>
+            <select id="searchModeSelect">
+              <option value="standard" selected>標準</option>
+              <option value="max">最高効率</option>
+            </select>
+          </div>
+
+          <details id="searchDetails" style="margin-top:8px">
+            <summary style="cursor:pointer;font-weight:700;color:#4d493f">素材使用の目安</summary>
+            <div style="display:grid;grid-template-columns:1fr 72px;gap:6px 8px;align-items:center;margin-top:9px">
+              <label for="capGather">採集素材</label><input id="capGather" type="number" min="4" max="99" value="25">
+              <label for="capCrop">作物素材</label><input id="capCrop" type="number" min="4" max="99" value="20">
+              <label for="capAnimal">飼育動物素材</label><input id="capAnimal" type="number" min="4" max="99" value="16">
+              <label for="capGranary">グラナリー素材</label><input id="capGranary" type="number" min="4" max="99" value="12">
+            </div>
+            <div class="small" style="margin-top:7px">標準検索で、この数を超える素材の追加使用をできるだけ避けます。</div>
+          </details>
+
+          <div id="generateStatus" class="small" style="margin-top:8px;min-height:18px"></div>
+        </div>
+      </section>
+    </aside>
+
+    <main>
+      <section class="panel">
+        <div class="panel-title">生成結果のサマリー</div>
+        <div id="summary" class="summary">
+          <div class="summary-card"><div class="label">工房の数</div><div class="value">-</div></div>
+          <div class="summary-card"><div class="label">生産スロット / 週</div><div class="value">-</div></div>
+          <div class="summary-card"><div class="label">あわせて生産回数</div><div class="value">-</div></div>
+          <div class="summary-card"><div class="label">やる気</div><div class="value">-</div></div>
+          <div class="summary-card status"><div class="label">制約の達成状況</div><div class="value">未生成</div></div>
+        </div>
+        <div class="note">※ 価値目安には「工房のやる気」を反映しています。標準検索では最高効率付近の候補から素材負担の軽い案を優先します。人気・需要・供給変化は考慮しません。</div>
+      </section>
+
+      <section class="panel schedule-panel">
+        <div class="schedule-head">
+          <strong id="dayTitle">1日目の工房スケジュール（全工房共通）</strong>
+        </div>
+        <div style="overflow:auto">
+          <table class="schedule-table">
+            <thead>
+              <tr>
+                <th class="col-no">No.</th>
+                <th class="col-name">島産品名</th>
+                <th class="col-time">時間</th>
+                <th class="col-rank">Rank</th>
+                <th class="col-cat">カテゴリ（特性）</th>
+                <th class="col-value">価値目安</th>
+                <th class="col-eff">あわせて / やる気</th>
+              </tr>
+            </thead>
+            <tbody id="scheduleBody">
+              <tr><td colspan="7" style="text-align:center;color:#777;padding:30px">条件を設定して「スケジュールを生成」を押してください。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <div id="tabs" class="tabs" style="display:none"></div>
+
+      <div id="weekConfirmBar" style="display:none;margin:10px 0 12px;align-items:center;gap:8px;flex-wrap:wrap">
+        <button id="confirmWeek" class="olive" style="width:auto">✓ 今週分を確定</button>
+        <button id="undoWeek" class="secondary" style="width:auto">直前の確定を取り消す</button>
+        <span id="historyStatus" class="small"></span>
+      </div>
+      <section id="materialPanel" class="panel material-panel" style="display:none">
+        <div class="panel-title">5日分の必要素材</div>
+        <div id="materialGrid" class="material-grid"></div>
+        <div class="note">※ 表示数は全工房ぶんです。標準検索では5日間の累計素材数と「素材使用の目安」を使って、同じ素材への偏りを避けます。</div>
+      </section>
+
+      <div class="info-box">
+        <h3>スケジュールについて</h3>
+        <ul>
+          <li>1日に24時間分を生産し、週5日分の予定を作成します。</li>
+          <li>全工房が同じスケジュールになるように生成します。</li>
+          <li>「あわせて生産」は、特性が1つ以上共通する異なる島産品を連続させた場合に成立します。成立した生産の開始時に、工房1棟につきやる気が+1されます。</li>
+          <li>ねこみみさんのおねがいを使用する場合は絶対達成条件です。完成個数は通常＝工房数×1、あわせて生産＝工房数×2として集計します。</li>
+        </ul>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="js/data.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

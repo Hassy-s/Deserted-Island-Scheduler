@@ -1,0 +1,829 @@
+// 無人島工房スケジューラー - UI / 保存 / スケジュール生成
+// data.js を先に読み込んでください。
+
+// 4h / 6h / 8h product names cross-checked against user-provided in-game lists (v0.19).
+const STORAGE_KEY="island_workshop_scheduler_v019";
+const PREVIOUS_STORAGE_KEYS=["island_workshop_scheduler_v018"];
+const HISTORY_KEY="island_workshop_scheduler_history_v1";
+
+function loadHistory(){
+  try{
+    const h=JSON.parse(localStorage.getItem(HISTORY_KEY)||"[]");
+    return Array.isArray(h)?h:[];
+  }catch(e){ return []; }
+}
+function saveHistory(h){
+  localStorage.setItem(HISTORY_KEY,JSON.stringify(h.slice(-8)));
+}
+function weightedHistoryMaterials(){
+  const h=loadHistory();
+  const out={};
+  // Most recent week matters most; effect fades over several weeks.
+  const weights=[1.0,0.55,0.28,0.12];
+  for(let back=0;back<Math.min(h.length,weights.length);back++){
+    const week=h[h.length-1-back];
+    const w=weights[back];
+    for(const [name,qty] of Object.entries(week.materials||{})){
+      out[name]=(out[name]||0)+qty*w;
+    }
+  }
+  return out;
+}
+function historyMaterialPenalty(item,workshops){
+  if(searchMode()!=="standard") return 0;
+  const hist=weightedHistoryMaterials();
+  if(!Object.keys(hist).length) return 0;
+  let p=0;
+  for(const m of (item.materials||[])){
+    // Weak tie-breaker only: recent overuse gently lowers priority.
+    p += (hist[m.name]||0) * m.qty * workshops * 0.42;
+  }
+  return p;
+}
+
+let excluded=new Set(), LAST=null, activeDay=0;
+const $=s=>document.querySelector(s);
+const collator=new Intl.Collator("ja");
+const intersects=(a,b)=>a.some(x=>b.includes(x));
+const efficient=(a,b)=>a&&b&&a.id!==b.id&&intersects(a.cats,b.cats);
+
+function autoWorkshops(rank){return rank>=15?4:rank>=5?3:2}
+function available(){
+  const rank=+$("#rank").value;
+  return ITEMS.filter(i=>i.rank<=rank&&!excluded.has(i.id))
+}
+function favorEnabled(){return $("#favorOn").checked}
+function fillFavorSelects(){
+  const rank=+$("#rank").value;
+  for(const t of [4,6,8]){
+    const sel=$("#favor"+t), old=sel.value;
+    sel.innerHTML='<option value="">---- 選択してください ----</option>';
+    ITEMS.filter(i=>i.time===t&&i.rank<=rank&&!excluded.has(i.id))
+      .sort((a,b)=>collator.compare(a.name,b.name))
+      .forEach(i=>{
+        const o=document.createElement("option");
+        o.value=i.id;o.textContent=i.name;sel.appendChild(o)
+      });
+    if([...sel.options].some(o=>o.value===old)) sel.value=old
+  }
+}
+function save(){
+  localStorage.setItem(STORAGE_KEY,JSON.stringify({
+    rank:+$("#rank").value,
+    workshops:+$("#workshops").value,
+    landmarks:+$("#landmarks").value,
+    excluded:[...excluded],
+    favor:favorEnabled(),
+    f4:$("#favor4").value,
+    f6:$("#favor6").value,
+    f8:$("#favor8").value,
+    searchMode:searchMode(),
+    capGather:+$("#capGather").value,
+    capCrop:+$("#capCrop").value,
+    capAnimal:+$("#capAnimal").value,
+    capGranary:+$("#capGranary").value
+  }))
+}
+function load(){
+  try{
+    let raw=localStorage.getItem(STORAGE_KEY);
+    if(!raw){
+      for(const key of PREVIOUS_STORAGE_KEYS){
+        raw=localStorage.getItem(key);
+        if(raw) break;
+      }
+    }
+    const s=JSON.parse(raw||"{}");
+    if(s.rank)$("#rank").value=s.rank;
+    if(s.workshops)$("#workshops").value=s.workshops;
+    if(s.landmarks)$("#landmarks").value=s.landmarks;
+    excluded=new Set(s.excluded||[]);
+    $("#favorOn").checked=!!s.favor;
+    $("#favorOff").checked=!s.favor;
+    $("#favors").classList.toggle("on",!!s.favor);
+    fillFavorSelects();
+    if(s.f4)$("#favor4").value=s.f4;
+    if(s.f6)$("#favor6").value=s.f6;
+    if(s.f8)$("#favor8").value=s.f8;
+    $("#searchModeSelect").value = s.searchMode==="max" ? "max" : "standard";
+    if(s.capGather!==undefined)$("#capGather").value=s.capGather;
+    if(s.capCrop!==undefined)$("#capCrop").value=s.capCrop;
+    if(s.capAnimal!==undefined)$("#capAnimal").value=s.capAnimal;
+    if(s.capGranary!==undefined)$("#capGranary").value=s.capGranary
+  }catch(e){}
+  renderExclude();
+  updateExcludeSummary()
+}
+function updateExcludeSummary(){
+  $("#excludeSummary").textContent=`除外：${excluded.size}件 / 現在使用可能：${available().length}品`
+}
+function renderExclude(){
+  const q=$("#filter").value.trim(),grid=$("#itemGrid");
+  grid.innerHTML="";
+  ITEMS.slice().sort((a,b)=>collator.compare(a.name,b.name))
+    .filter(i=>!q||i.name.includes(q))
+    .forEach(i=>{
+      const d=document.createElement("label");
+      d.className="itemcheck";
+      d.innerHTML=`
+        <input type="checkbox" ${excluded.has(i.id)?"checked":""} data-id="${i.id}">
+        <span class="iname">${i.name}</span>
+        <span class="pill">${i.time}時間</span>
+        <span class="pill">Rank ${i.rank}</span>
+        <span class="pill">${i.cats.join(" / ")}</span>`;
+      grid.appendChild(d)
+    });
+  grid.querySelectorAll("input").forEach(cb=>cb.onchange=()=>{
+    const id=+cb.dataset.id;
+    cb.checked?excluded.add(id):excluded.delete(id);
+    updateExcludeSummary();fillFavorSelects();save()
+  })
+}
+
+
+function grooveCap(){
+  const lm=+$("#landmarks").value;
+  return ({1:15,2:20,3:25,4:35,5:45})[lm]||15;
+}
+
+
+function addMaterials(total,item,workshops){
+  const out={...total};
+  for(const m of (item.materials||[])){
+    out[m.name]=(out[m.name]||0)+m.qty*workshops;
+  }
+  return out;
+}
+
+function searchMode(){ return $("#searchModeSelect").value==="max" ? "max" : "standard"; }
+
+const RARE_MATERIALS = new Set([
+  "無人島のアリッサム","無人島のガーネット原石","無人島のスプルース原木",
+  "無人島のハンマーヘッド","無人島の銀鉱","無人島のオパール原木",
+  "無人島のグリムシュルーム","無人島の大理石","無人島のスペクトリン",
+  "無人島の金鉱","無人島の水晶塊","無人島の洞窟エビ"
+]);
+
+const CROP_MATERIALS = new Set([
+  "アイルキャベツ","アイルパンプキン","アイルパースニップ","アイルトマト",
+  "アイルコーン","アイルポポト","アイルオニオン","アイル小麦",
+  "アイルラナービーンズ","アイルビーツ","アイルエッグプラント","アイルブロッコリー",
+  "アイルラディッシュ","アイルズッキーニ","アイルスイートポポト",
+  "アイルバッファロービーン","アイルリーキ","アイルウォーターメロン"
+]);
+
+function isAnimalMaterial(name){ return name.startsWith("飼育動物の"); }
+function materialType(name){
+  if(RARE_MATERIALS.has(name)) return "rare";
+  if(isAnimalMaterial(name)) return "animal";
+  if(CROP_MATERIALS.has(name)) return "crop";
+  return "gather";
+}
+
+function comfortLimit(name){
+  const t=materialType(name);
+  if(t==="rare") return 6;
+  if(t==="animal") return 10;
+  if(t==="crop") return 14;
+  return 20;
+}
+
+function typeMultiplier(name){
+  const t=materialType(name);
+  if(t==="rare") return 4.0;
+  if(t==="animal") return 2.2;
+  if(t==="crop") return 1.7;
+  return 1.0;
+}
+
+function capValue(id,fallback){
+  const el=$(id);
+  const v=el ? +el.value : fallback;
+  return Number.isFinite(v) && v>=1 ? v : fallback;
+}
+function standardSoftCap(name){
+  const t=materialType(name);
+  if(t==="rare") return capValue("#capGranary",12);
+  if(t==="animal") return capValue("#capAnimal",16);
+  if(t==="crop") return capValue("#capCrop",20);
+  return capValue("#capGather",25);
+}
+
+function wouldExceedStandardCap(currentMaterials,item,workshops){
+  if(searchMode()!=="standard") return false;
+  for(const m of (item.materials||[])){
+    const after=(currentMaterials[m.name]||0) + m.qty*workshops;
+    if(after>standardSoftCap(m.name)) return true;
+  }
+  return false;
+}
+
+function materialAge(name){
+  const current=+$("#rank").value;
+  const unlock=MATERIAL_UNLOCK[name] || current;
+  return Math.max(0,current-unlock);
+}
+
+
+function materialWeight(name){
+  if(searchMode()==="max") return 0;
+
+  const age=materialAge(name);
+  let ageWeight;
+  if(age>=10) ageWeight=0.70;
+  else if(age>=7) ageWeight=0.82;
+  else if(age>=4) ageWeight=0.95;
+  else if(age>=2) ageWeight=1.08;
+  else if(age>=1) ageWeight=1.18;
+  else ageWeight=1.30;
+
+  return ageWeight * typeMultiplier(name);
+}
+
+function materialCostForQty(name,qty){
+  if(searchMode()==="max") return 0;
+  const w=materialWeight(name);
+  const limit=comfortLimit(name);
+
+  // Up to the comfort amount, cost is intentionally gentle.
+  const baseQty=Math.min(qty,limit);
+  let cost=baseQty*w*1.4;
+
+  // Once the material passes the comfort line, every extra piece
+  // becomes progressively more expensive.
+  const over=Math.max(0,qty-limit);
+  cost += over*over*w*22.0;
+
+  // If it keeps climbing well past the comfort line, strongly encourage
+  // the search to switch to other materials.
+  const severe=Math.max(0,qty-(limit+8));
+  cost += severe*severe*w*42.0;
+
+  return cost;
+}
+
+function materialBurden(materials){
+  if(searchMode()==="max") return 0;
+
+  const entries=Object.entries(materials||{});
+  let p=0;
+  for(const [name,qty] of entries){
+    p += materialCostForQty(name,qty);
+  }
+
+  // A moderate spread is useful on the island, but do not reward
+  // infinite variety. This only acts as a tie-breaker.
+  const unique=entries.filter(([_,qty])=>qty>0).length;
+  const diversityCredit=Math.min(unique,16)*18;
+
+  return Math.max(0,p-diversityCredit);
+}
+
+function incrementalMaterialBurden(currentMaterials,item,workshops){
+  if(searchMode()==="max") return 0;
+
+  let delta=0;
+  for(const m of (item.materials||[])){
+    const before=currentMaterials[m.name]||0;
+    const after=before + m.qty*workshops;
+    delta += materialCostForQty(m.name,after)-materialCostForQty(m.name,before);
+  }
+  return delta;
+}
+
+
+function capViolationScore(materials){
+  if(searchMode()!=="standard") return 0;
+  let score=0;
+  for(const [name,qty] of Object.entries(materials||{})){
+    const over=Math.max(0,qty-standardSoftCap(name));
+    score += over*over*10000;
+  }
+  return score;
+}
+
+function practicalBurden(materials,days){
+  return materialBurden(materials)+capViolationScore(materials);
+}
+function practicalBurden(materials,days){
+  // v0.9 deliberately does NOT penalize 8h crafts by duration alone.
+  // If an 8h craft uses easy/old materials, it is allowed naturally.
+  return materialBurden(materials);
+}
+function candidateBaseScore(item, prev, grooveAfter, favorRemaining, currentMaterials, workshops){
+  let score = (item.value / item.time) * 12;
+  const eff = efficient(prev,item);
+  if(eff) score += 500;
+  score *= (1 + grooveAfter/100);
+
+  if(favorRemaining && favorRemaining[item.id] > 0){
+    score += 2500 + favorRemaining[item.id] * 40;
+    if(eff) score += 500;
+  }
+
+  if(prev && prev.id===item.id) score -= 5000;
+
+  // Key v0.11 behavior:
+  // as soon as a material is already near/over its comfort amount,
+  // adding more of it becomes unattractive before the day is finalized.
+  score -= incrementalMaterialBurden(currentMaterials||{},item,workshops) * 5.5;
+
+  // Cross-week rotation: recent material use is only a gentle tie-breaker.
+  // It never acts as a ban and is much weaker than this week's material limits.
+  score -= historyMaterialPenalty(item,workshops);
+
+  return score;
+}
+
+function cloneFavor(obj){
+  const x={};
+  for(const k in obj) x[k]=obj[k];
+  return x;
+}
+function favorKey(obj){
+  return Object.keys(obj).sort((a,b)=>a-b).map(k=>`${k}:${obj[k]}`).join("|");
+}
+function applyProductionToFavor(favor,itemId,qty){
+  if(favor[itemId]!==undefined){
+    favor[itemId]=Math.max(0,favor[itemId]-qty);
+  }
+}
+function favorPenalty(favor){
+  let miss=0;
+  for(const k in favor) miss += favor[k];
+  return miss;
+}
+function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterials={}, beamWidth=180){
+  // Beam-search all 24h sequences. State contains time, prev, groove, favor remaining and value.
+  let beam=[{
+    time:0, prev:null, groove:startGroove, favor:cloneFavor(startFavor),
+    value:0, effTransitions:0, slots:[], materials:{...startMaterials}, dayMaterials:{}
+  }];
+
+  const bestByKey = new Map();
+
+  while(true){
+    let expanded=[];
+    let any=false;
+    for(const st of beam){
+      if(st.time===24){
+        expanded.push(st);
+        continue;
+      }
+      const fits=avail.filter(i=>st.time+i.time<=24);
+      if(!fits.length){
+        expanded.push(st);
+        continue;
+      }
+      any=true;
+
+      // Pre-rank choices to keep browser search manageable.
+      let ranked=fits.map(item=>{
+        const isEff=efficient(st.prev,item);
+        const grooveAfter=isEff?Math.min(cap,st.groove+workshops):st.groove;
+        return {
+          item,
+          rank:candidateBaseScore(item,st.prev,grooveAfter,st.favor,st.materials,workshops),
+          overCap:wouldExceedStandardCap(st.materials,item,workshops)
+        };
+      }).sort((a,b)=>b.rank-a.rank);
+
+      // Stay under the weekly soft caps whenever at least one valid choice exists.
+      // Only fall back to over-cap choices if every continuation would exceed a cap.
+      if(searchMode()==="standard"){
+        const underCap=ranked.filter(x=>!x.overCap);
+        if(underCap.length) ranked=underCap;
+      }
+      ranked=ranked.slice(0,10);
+
+      for(const {item} of ranked){
+        const isEff=efficient(st.prev,item);
+        const grooveBefore=st.groove;
+        const grooveAfter=isEff?Math.min(cap,st.groove+workshops):st.groove;
+        const qty=workshops*(isEff?2:1);
+        const value=Math.round(item.value*qty*(1+grooveAfter/100));
+        const favor=cloneFavor(st.favor);
+        applyProductionToFavor(favor,item.id,qty);
+        const materials=addMaterials(st.materials,item,workshops);
+        const dayMaterials=addMaterials(st.dayMaterials,item,workshops);
+        expanded.push({
+          time:st.time+item.time,
+          prev:item,
+          groove:grooveAfter,
+          favor,
+          value:st.value+value,
+          effTransitions:st.effTransitions+(isEff?1:0),
+          materials,
+          dayMaterials,
+          slots:[...st.slots,{
+            item,start:st.time,end:st.time+item.time,eff:isEff,qty,
+            grooveBefore,grooveAfter,valueWithGroove:value
+          }]
+        });
+      }
+    }
+
+    if(!any) break;
+
+    bestByKey.clear();
+    for(const st of expanded){
+      const matKey=Object.entries(st.materials)
+        .map(([n,q])=>`${MATERIAL_INDEX[n]??n}:${q}`)
+        .sort()
+        .join(".");
+      const key=`${st.time}|${st.prev?st.prev.id:0}|${st.groove}|${favorKey(st.favor)}|${matKey}`;
+      const old=bestByKey.get(key);
+      if(!old || st.value>old.value) bestByKey.set(key,st);
+    }
+
+    beam=[...bestByKey.values()].sort((a,b)=>{
+      // Favor shortfall dominates; then value, then groove, then efficient transitions.
+      const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
+      const sa=a.value + a.groove*80 + a.effTransitions*40 - pa*2200 - materialBurden(a.materials);
+      const sb=b.value + b.groove*80 + b.effTransitions*40 - pb*2200 - materialBurden(b.materials);
+      return sb-sa;
+    }).slice(0,beamWidth);
+
+    if(beam.every(x=>x.time===24)) break;
+  }
+
+  return beam.filter(x=>x.time===24).sort((a,b)=>{
+    const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
+    if(pa!==pb) return pa-pb;
+    if(searchMode()==="standard"){
+      const ba=practicalBurden(a.materials), bb=practicalBurden(b.materials);
+      if(ba!==bb) return ba-bb;
+    }
+    return b.value-a.value;
+  }).slice(0,24);
+}
+
+
+function daySignature(slots){
+  return (slots||[]).map(s=>s.item.id).join("-");
+}
+function chooseSchedule(){
+  const avail=available();
+  if(!avail.length) throw new Error("使用可能な島産品がありません。");
+
+  const workshops=+$("#workshops").value;
+  const cap=grooveCap();
+
+  const favorStart={};
+  const targets=[];
+  if(favorEnabled()){
+    for(const [t,n] of [[4,8],[6,6],[8,8]]){
+      const id=+$("#favor"+t).value;
+      if(!id) throw new Error(`${t}時間品のお願いを選択してください。`);
+      const item=ITEMS.find(x=>x.id===id);
+      if(!item || !avail.some(x=>x.id===id)) throw new Error(`${t}時間品が現在の条件では使用できません。`);
+      favorStart[id]=n;
+      targets.push(id);
+    }
+  }
+
+  // Weekly beam: each branch chooses one complete 24h day schedule.
+  let weekBeam=[{
+    day:0, groove:0, favor:cloneFavor(favorStart), value:0,
+    effTransitions:0, days:[], produced:{}, materials:{}, daySignatures:[]
+  }];
+
+  const WEEK_BEAM=48;
+
+  for(let day=0;day<5;day++){
+    let next=[];
+    for(const wk of weekBeam){
+      const dayCandidates=daySearch(avail,workshops,cap,wk.groove,wk.favor,wk.materials,90);
+
+      for(const dc of dayCandidates.slice(0,16)){
+        const produced={...wk.produced};
+        for(const sl of dc.slots){
+          produced[sl.item.id]=(produced[sl.item.id]||0)+sl.qty;
+        }
+        const materials={...wk.materials};
+        for(const [name,qty] of Object.entries(dc.dayMaterials||{})){
+          materials[name]=(materials[name]||0)+qty;
+        }
+        const sig=daySignature(dc.slots);
+        const prevSig=wk.daySignatures.length ? wk.daySignatures[wk.daySignatures.length-1] : null;
+
+        // In standard mode, do not repeat the exact same day back-to-back.
+        // Highest-efficiency mode is allowed to repeat if it is mathematically best.
+        if(searchMode()==="standard" && prevSig && sig===prevSig){
+          continue;
+        }
+
+        next.push({
+          day:day+1,
+          groove:dc.groove,
+          favor:cloneFavor(dc.favor),
+          value:wk.value+dc.value,
+          effTransitions:wk.effTransitions+dc.effTransitions,
+          days:[...wk.days,dc.slots],
+          produced,
+          materials,
+          daySignatures:[...wk.daySignatures,sig]
+        });
+      }
+    }
+
+    next.sort((a,b)=>{
+      const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
+      // Before final day, remaining favors are a strong penalty but not absolute,
+      // so optimizer can build groove first when useful.
+      const remainingDays=5-(day+1);
+      const aFeasiblePenalty=pa * (remainingDays===0 ? 1000000 : 5000);
+      const bFeasiblePenalty=pb * (remainingDays===0 ? 1000000 : 5000);
+      const burdenA=practicalBurden(a.materials,a.days);
+      const burdenB=practicalBurden(b.materials,b.days);
+
+      if(searchMode()==="standard"){
+        // Standard mode: material burden dominates.
+        // Value/groove only break ties between similarly easy schedules.
+        const sa = -(burdenA*6.0) + a.value*0.20 + a.groove*30 + a.effTransitions*20 - aFeasiblePenalty;
+        const sb = -(burdenB*6.0) + b.value*0.20 + b.groove*30 + b.effTransitions*20 - bFeasiblePenalty;
+        return sb-sa;
+      }else{
+        const sa=a.value + a.groove*120 + a.effTransitions*60 - aFeasiblePenalty;
+        const sb=b.value + b.groove*120 + b.effTransitions*60 - bFeasiblePenalty;
+        return sb-sa;
+      }
+    });
+
+    // Deduplicate similar weekly states.
+    const dedup=new Map();
+    for(const wk of next){
+      const key=`${wk.groove}|${favorKey(wk.favor)}`;
+      const old=dedup.get(key);
+      if(!old || wk.value>old.value) dedup.set(key,wk);
+    }
+    weekBeam=[...dedup.values()].sort((a,b)=>{
+      const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
+      if(day===4 && pa!==pb) return pa-pb;
+      if(searchMode()==="standard"){
+        const burdenA=practicalBurden(a.materials,a.days);
+        const burdenB=practicalBurden(b.materials,b.days);
+        const sa=-(burdenA*6.0)+a.value*0.20+a.groove*30-pa*5000;
+        const sb=-(burdenB*6.0)+b.value*0.20+b.groove*30-pb*5000;
+        return sb-sa;
+      }else{
+        const sa=a.value+a.groove*120-pa*5000;
+        const sb=b.value+b.groove*120-pb*5000;
+        return sb-sa;
+      }
+    }).slice(0,WEEK_BEAM);
+  }
+
+  if(!weekBeam.length) throw new Error("現在の条件では5日分のスケジュールを生成できません。");
+
+  // If favors are enabled, only accept fully satisfied schedules.
+  let candidates=weekBeam;
+  if(favorEnabled()){
+    const satisfied=weekBeam.filter(w=>favorPenalty(w.favor)===0);
+    if(!satisfied.length){
+      const best=weekBeam.slice().sort((a,b)=>favorPenalty(a.favor)-favorPenalty(b.favor))[0];
+      let details=[];
+      for(const id of targets){
+        const item=ITEMS.find(i=>i.id===id);
+        const need=item.time===6?6:8;
+        const got=Math.min(need,best.produced[id]||0);
+        if(got<need) details.push(`${item.name}: ${got}/${need}`);
+      }
+      throw new Error(`現在の条件では、ねこみみさんのおねがいを絶対達成できる案が見つかりません。${details.length?"（"+details.join(" / ")+"）":""}`);
+    }
+    candidates=satisfied;
+  }
+
+  let best;
+  if(searchMode()==="max"){
+    best=candidates.slice().sort((a,b)=>b.value-a.value)[0];
+  }else{
+    best=candidates.slice().sort((a,b)=>{
+      const burdenA=practicalBurden(a.materials,a.days);
+      const burdenB=practicalBurden(b.materials,b.days);
+      if(Math.abs(burdenA-burdenB)>1) return burdenA-burdenB;
+      return b.value-a.value;
+    })[0];
+  }
+
+  const favorNeeds=new Map();
+  for(const id of targets){
+    favorNeeds.set(id,best.favor[id]||0);
+  }
+
+  const usedCount=new Map();
+  for(const [id,qty] of Object.entries(best.produced||{})){
+    usedCount.set(+id,qty);
+  }
+
+  const totalSlots=best.days.reduce((sum,day)=>sum+day.length*workshops,0);
+
+  return{
+    days:best.days,
+    workshops,
+    targets,
+    favorNeeds,
+    usedCount,
+    estimatedValue:best.value,
+    effTransitions:best.effTransitions,
+    totalSlots,
+    groove:best.groove,
+    grooveCap:cap,
+    materials:best.materials||{},
+    materialPenalty:practicalBurden(best.materials||{},best.days||[])
+  };
+}
+function formatCats(cats){
+  return cats.map(c=>`<span class="tag">${c}</span>`).join("")
+}
+function renderDay(idx){
+  if(!LAST)return;
+  activeDay=idx;
+  const slots=LAST.days[idx];
+  $("#dayTitle").textContent=`${idx+1}日目の工房スケジュール（全工房共通）`;
+  $("#scheduleBody").innerHTML=slots.map((s,i)=>{
+    const isTarget=LAST.targets.includes(s.item.id);
+    return `<tr>
+      <td class="col-no"><div class="no-circle">${i+1}</div></td>
+      <td class="col-name"><span class="item-name">${s.item.name}</span>${isTarget?'<span class="target-mini">お願い</span>':""}</td>
+      <td class="col-time">${s.item.time}時間</td>
+      <td class="col-rank">${s.item.rank}</td>
+      <td class="col-cat">${formatCats(s.item.cats)}</td>
+      <td class="col-value value-cell">${s.valueWithGroove.toLocaleString()}</td>
+      <td class="col-eff">${s.eff
+        ? `<span class="eff-yes">○</span>　やる気 ${s.grooveBefore}→${s.grooveAfter}`
+        : `<span class="eff-no">－</span>　やる気 ${s.grooveAfter}`}</td>
+    </tr>`
+  }).join("");
+  $("#tabs").querySelectorAll("button").forEach((b,i)=>b.classList.toggle("active",i===idx))
+}
+function renderSummary(){
+  const unmet=[...LAST.favorNeeds.entries()].filter(([_,n])=>n>0);
+  let favorProgress="";
+  if(favorEnabled()){
+    favorProgress = LAST.targets.map(id=>{
+      const item=ITEMS.find(i=>i.id===id);
+      const need=item.time===6?6:8;
+      const got=Math.min(need,LAST.usedCount.get(id)||0);
+      return `${item.time}h ${got}/${need}`;
+    }).join(" / ");
+  }
+  const status = favorEnabled()
+    ? (unmet.length?'<span class="status-warn">⚠ お願い未達</span>':'<span class="status-ok">✓ お願い達成</span>')
+    : '<span class="status-ok">✓ 条件内で生成</span>';
+
+  $("#summary").innerHTML=`
+    <div class="summary-card">
+      <div class="label">工房の数</div>
+      <div class="value">${LAST.workshops}棟</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">生産スロット / 週</div>
+      <div class="value">${LAST.totalSlots}</div>
+      <div class="sub">全工房合計</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">あわせて生産回数</div>
+      <div class="value">${LAST.effTransitions}</div>
+      <div class="sub">共通スケジュール上</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">工房のやる気</div>
+      <div class="value">${LAST.groove}/${LAST.grooveCap}</div>
+      <div class="sub">売上 +${LAST.groove}% / 価値目安 ${Math.round(LAST.estimatedValue).toLocaleString()}</div>
+    </div>
+    <div class="summary-card status">
+      <div class="label">制約の達成状況</div>
+      <div class="value" style="font-size:16px">${status}</div>${favorProgress?`<div class="sub">${favorProgress}</div>`:""}
+    </div>`;
+}function renderTabs(){
+  $("#tabs").style.display="grid";
+  $("#tabs").innerHTML=[0,1,2,3,4].map(i=>`<button class="day-tab ${i===0?"active":""}" data-day="${i}">${i+1}日目</button>`).join("");
+  $("#tabs").querySelectorAll("button").forEach(b=>b.onclick=()=>renderDay(+b.dataset.day))
+}
+
+function renderMaterials(){
+  if(!LAST)return;
+  const rows=Object.entries(LAST.materials||{}).sort((a,b)=>b[1]-a[1] || collator.compare(a[0],b[0]));
+  $("#materialPanel").style.display="block";
+  $("#weekConfirmBar").style.display="flex";
+  const hc=loadHistory().length;
+  $("#historyStatus").textContent=hc?`確定済み履歴：${hc}週`:"";
+  $("#materialGrid").innerHTML=rows.map(([name,qty])=>{
+    const t=materialType(name);
+    const limit=comfortLimit(name);
+    const cls=qty>limit+12?"very-heavy":qty>limit?"heavy":"";
+    let hint=t==="rare"?"グラナリー":t==="animal"?"飼育":t==="crop"?"作物":"採集";
+    return `<div class="material-card ${cls}">
+      <span class="mname">${t==="rare"?"⚠ ":""}${name} <span class="pill">${hint}</span></span>
+      <span class="mqty">×${qty}</span>
+    </div>`;
+  }).join("");
+}
+function render(){
+  try{LAST=chooseSchedule()}
+  catch(e){
+    $("#scheduleBody").innerHTML=`<tr><td colspan="7" style="text-align:center;color:#b94d4d;padding:30px">${e.message}</td></tr>`;
+    return
+  }
+  renderSummary();
+  renderTabs();
+  renderDay(0);
+  renderMaterials();
+  $("#weekConfirmBar").style.display="flex";
+  const hc=loadHistory().length;
+  $("#historyStatus").textContent=hc?`確定済み履歴：${hc}週`:"";
+  save()
+}
+
+$("#rank").addEventListener("change",()=>{
+  $("#workshops").value=autoWorkshops(+$("#rank").value);
+  fillFavorSelects();updateExcludeSummary();save()
+});
+$("#workshops").addEventListener("change",save);
+$("#landmarks").addEventListener("change",save);
+$("#favorOn").addEventListener("change",()=>{
+  $("#favors").classList.add("on");save()
+});
+$("#favorOff").addEventListener("change",()=>{
+  $("#favors").classList.remove("on");save()
+});
+["#favor4","#favor6","#favor8"].forEach(s=>$(s).addEventListener("change",save));
+$("#searchModeSelect").addEventListener("change",save);
+["#capGather","#capCrop","#capAnimal","#capGranary"].forEach(sel=>$(sel).addEventListener("change",save));
+$("#filter").oninput=renderExclude;
+$("#allOn").onclick=()=>{ITEMS.forEach(i=>excluded.add(i.id));renderExclude();updateExcludeSummary();fillFavorSelects();save()};
+$("#allOff").onclick=()=>{excluded.clear();renderExclude();updateExcludeSummary();fillFavorSelects();save()};
+$("#confirmWeek").onclick=()=>{
+  if(!LAST || !LAST.materials){
+    $("#historyStatus").textContent="先にスケジュールを生成してください。";
+    return;
+  }
+  const h=loadHistory();
+  const materials={...LAST.materials};
+  const signature=JSON.stringify(Object.entries(materials).sort(([a],[b])=>a.localeCompare(b)));
+  if(h.length && h[h.length-1].signature===signature){
+    $("#historyStatus").textContent="この生成結果はすでに今週分として確定済みです。";
+    return;
+  }
+  h.push({
+    confirmedAt:new Date().toISOString(),
+    materials,
+    signature
+  });
+  saveHistory(h);
+  $("#historyStatus").textContent=`今週分を保存しました（履歴 ${loadHistory().length}週）`;
+};
+
+$("#undoWeek").onclick=()=>{
+  const h=loadHistory();
+  if(!h.length){
+    $("#historyStatus").textContent="取り消せる履歴はありません。";
+    return;
+  }
+  h.pop();
+  saveHistory(h);
+  $("#historyStatus").textContent=`直前の確定を取り消しました（履歴 ${h.length}週）`;
+};
+
+$("#generate").onclick=()=>{
+  const btn=$("#generate");
+  const status=$("#generateStatus");
+  btn.disabled=true;
+  btn.classList.add("generating");
+  btn.textContent="⏳ 生成中…";
+  status.textContent="スケジュールを計算しています。";
+
+  setTimeout(()=>{
+    try{
+      render();
+      status.textContent="生成完了";
+    }catch(err){
+      status.textContent="生成中にエラーが発生しました。";
+      console.error(err);
+    }finally{
+      btn.disabled=false;
+      btn.classList.remove("generating");
+      btn.textContent="⚙ スケジュールを生成";
+    }
+  },30);
+};
+$("#saveBtn").onclick=()=>{save();alert("設定を保存しました。")};
+$("#reset").onclick=()=>{
+  localStorage.removeItem(STORAGE_KEY);excluded.clear();
+  $("#rank").value=5;$("#workshops").value=3;$("#landmarks").value=2;
+  $("#favorOff").checked=true;$("#favorOn").checked=false;$("#favors").classList.remove("on");$("#searchModeSelect").value="standard";$("#capGather").value=25;$("#capCrop").value=20;$("#capAnimal").value=16;$("#capGranary").value=12;
+  fillFavorSelects();renderExclude();updateExcludeSummary();
+  $("#summary").innerHTML=`
+    <div class="summary-card"><div class="label">工房の数</div><div class="value">-</div></div>
+    <div class="summary-card"><div class="label">生産スロット / 週</div><div class="value">-</div></div>
+    <div class="summary-card"><div class="label">あわせて生産回数</div><div class="value">-</div></div>
+    <div class="summary-card"><div class="label">やる気</div><div class="value">-</div></div>
+    <div class="summary-card status"><div class="label">制約の達成状況</div><div class="value">未生成</div></div>`;
+  $("#scheduleBody").innerHTML=`<tr><td colspan="7" style="text-align:center;color:#777;padding:30px">条件を設定して「スケジュールを生成」を押してください。</td></tr>`;
+  $("#tabs").style.display="none";
+  $("#materialPanel").style.display="none";
+  $("#generateStatus").textContent="";
+  LAST=null
+};
+load();
