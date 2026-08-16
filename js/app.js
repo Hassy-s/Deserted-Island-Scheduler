@@ -520,47 +520,67 @@ function growthPhase(dayIndex, groove, cap){
 }
 
 function phaseItemBias(item, prev, dayIndex, groove, cap){
-  if(searchMode()==="max") {
-    // Max mode still values early groove, but may choose longer crafts if total value wins.
-  }
-
-  const phase=growthPhase(dayIndex,groove,cap);
-  const isEff=efficient(prev,item);
-
-  if(phase==="growth"){
-    // Days 1-2: strongly prefer 4h chains and especially efficient transitions.
-    let score = item.time===4 ? 620 : item.time===6 ? -180 : -420;
-    if(isEff) score += 720;
-    return score;
-  }
-
-  if(phase==="transition"){
-    // Day 3: finish groove, then naturally move toward higher-value crafts.
-    let score = 0;
-    if(groove<cap && isEff) score += 320;
-    if(groove<cap && item.time===4) score += 160;
-    return score;
-  }
-
+  // v0.36: no duration is forced.
+  // 4h / 6h / 8h all remain valid; the 48h ROI evaluation decides whether
+  // faster groove or higher immediate value is better for the whole week.
   return 0;
 }
 
 function favorPlacementBias(item, favorRemaining, dayIndex, groove, cap){
   if(!favorEnabled() || !favorRemaining?.[item.id]) return 0;
 
-  const phase=growthPhase(dayIndex,groove,cap);
-
-  // 4h favor items fit naturally into the growth chain.
-  if(phase==="growth" && item.time===4) return 420;
-
-  // Prefer postponing 6h/8h favor items until the high-groove phase when feasible.
-  if(phase==="growth" && item.time===6) return -160;
-  if(phase==="growth" && item.time===8) return -300;
-
-  // Once groove is high, favor fulfillment is welcome.
-  if(phase==="profit") return 260;
-
+  // Favor completion is mandatory elsewhere in the algorithm.
+  // Here we only make a very small placement preference:
+  // 4h items fit early chains well, longer items are slightly preferred later.
+  if(dayIndex<=1 && item.time===4) return 90;
+  if(dayIndex>=2 && item.time>=6) return 70;
   return 0;
+}
+
+
+function representativeValuePerHour(avail){
+  if(!avail?.length) return 0;
+
+  // Use the stronger half of currently available products rather than one extreme item.
+  const rates=avail
+    .map(i=>i.value/i.time)
+    .sort((a,b)=>b-a);
+
+  const take=Math.max(1,Math.ceil(rates.length/2));
+  const sample=rates.slice(0,take);
+  return sample.reduce((a,b)=>a+b,0)/sample.length;
+}
+
+function futureGrooveROI(groove, completedDays, avail, workshops){
+  if(groove<=0 || completedDays>=5) return 0;
+
+  // Groove is a percentage bonus on later production.
+  // Estimate how much value the current groove can still create over the
+  // remaining days. This is deliberately an estimate used for beam pruning;
+  // final schedules still use their actually calculated weekly value.
+  const remainingDays=5-completedDays;
+  const remainingHours=remainingDays*24;
+  const rate=representativeValuePerHour(avail);
+
+  // Efficient production is common but not guaranteed. 1.45 is a conservative
+  // average quantity factor between normal (x1) and efficient (x2) production.
+  const estimatedBase=rate*remainingHours*workshops*1.45;
+  return estimatedBase*(groove/100);
+}
+
+function early48Score(wk, completedDays, avail, workshops, cap){
+  if(completedDays>2) return 0;
+
+  // Days 1-2 are treated as one 48h investment window:
+  // actual revenue already earned + estimated future revenue unlocked by groove.
+  // No craft duration is forced.
+  const roi=futureGrooveROI(wk.groove,completedDays,avail,workshops);
+
+  // A small timing preference favors getting the same groove sooner, but does
+  // not overpower a clearly better 6h/8h revenue choice.
+  const timing=grooveTimingScore(wk,cap)*0.18;
+
+  return roi+timing;
 }
 
 function grooveTimingScore(wk, grooveCapValue){
@@ -579,11 +599,11 @@ function grooveTimingScore(wk, grooveCapValue){
     const deficit=Math.max(0,target-g);
 
     // Missing an early target is costly because later crafts lose the groove bonus.
-    const deficitWeight=[360,520,620,100,20][d]||0;
+    const deficitWeight=[90,135,180,50,10][d]||0;
     score -= deficit*deficitWeight;
 
     // Earlier groove gets additional positive value.
-    const carryWeight=[220,170,80,25,5][d]||0;
+    const carryWeight=[65,48,26,10,2][d]||0;
     score += g*carryWeight;
   }
   return score;
@@ -620,7 +640,7 @@ function chooseSchedule(){
     effTransitions:0, days:[], produced:{}, materials:{}, daySignatures:[], grooveHistory:[]
   }];
 
-  const WEEK_BEAM=48;
+  const WEEK_BEAM=72;
 
   for(let day=0;day<5;day++){
     let next=[];
@@ -673,15 +693,17 @@ function chooseSchedule(){
       if(searchMode()==="standard"){
         // Standard mode: material burden dominates.
         // Value/groove only break ties between similarly easy schedules.
-        const earlyGrooveWeight = day===0 ? 95 : day===1 ? 70 : day===2 ? 45 : 30;
-        const sa = -(burdenA*6.0) + a.value*0.20 + a.groove*earlyGrooveWeight + a.effTransitions*20
-          + grooveTimingScore(a,cap) - aFeasiblePenalty;
-        const sb = -(burdenB*6.0) + b.value*0.20 + b.groove*earlyGrooveWeight + b.effTransitions*20
-          + grooveTimingScore(b,cap) - bFeasiblePenalty;
+        const completedDays=day+1;
+        const earlyA=early48Score(a,completedDays,avail,workshops,cap);
+        const earlyB=early48Score(b,completedDays,avail,workshops,cap);
+
+        const sa = -(burdenA*6.0) + a.value*0.23 + earlyA + a.effTransitions*12 - aFeasiblePenalty;
+        const sb = -(burdenB*6.0) + b.value*0.23 + earlyB + b.effTransitions*12 - bFeasiblePenalty;
         return sb-sa;
       }else{
-        const sa=a.value + a.groove*120 + a.effTransitions*60 - aFeasiblePenalty;
-        const sb=b.value + b.groove*120 + b.effTransitions*60 - bFeasiblePenalty;
+        const completedDays=day+1;
+        const sa=a.value + early48Score(a,completedDays,avail,workshops,cap) + a.effTransitions*35 - aFeasiblePenalty;
+        const sb=b.value + early48Score(b,completedDays,avail,workshops,cap) + b.effTransitions*35 - bFeasiblePenalty;
         return sb-sa;
       }
     });
@@ -689,7 +711,8 @@ function chooseSchedule(){
     // Deduplicate similar weekly states.
     const dedup=new Map();
     for(const wk of next){
-      const key=`${wk.groove}|${favorKey(wk.favor)}`;
+      const valueBucket = day<=1 ? Math.round(wk.value/500) : 0;
+      const key=`${wk.groove}|${favorKey(wk.favor)}|${valueBucket}`;
       const old=dedup.get(key);
       if(!old || wk.value>old.value) dedup.set(key,wk);
     }
@@ -699,13 +722,17 @@ function chooseSchedule(){
       if(searchMode()==="standard"){
         const burdenA=practicalBurden(a.materials,a.days);
         const burdenB=practicalBurden(b.materials,b.days);
-        const earlyGrooveWeight = day===0 ? 95 : day===1 ? 70 : day===2 ? 45 : 30;
-        const sa=-(burdenA*6.0)+a.value*0.20+a.groove*earlyGrooveWeight+grooveTimingScore(a,cap)-pa*5000;
-        const sb=-(burdenB*6.0)+b.value*0.20+b.groove*earlyGrooveWeight+grooveTimingScore(b,cap)-pb*5000;
+        const completedDays=day+1;
+        const earlyA=early48Score(a,completedDays,avail,workshops,cap);
+        const earlyB=early48Score(b,completedDays,avail,workshops,cap);
+
+        const sa=-(burdenA*6.0)+a.value*0.23+earlyA-pa*5000;
+        const sb=-(burdenB*6.0)+b.value*0.23+earlyB-pb*5000;
         return sb-sa;
       }else{
-        const sa=a.value+a.groove*120-pa*5000;
-        const sb=b.value+b.groove*120-pb*5000;
+        const completedDays=day+1;
+        const sa=a.value+early48Score(a,completedDays,avail,workshops,cap)-pa*5000;
+        const sb=b.value+early48Score(b,completedDays,avail,workshops,cap)-pb*5000;
         return sb-sa;
       }
     }).slice(0,WEEK_BEAM);
