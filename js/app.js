@@ -349,12 +349,12 @@ function earlyGrooveBonus(dayIndex, isEff, grooveBefore, grooveAfter, grooveCapV
 function candidateBaseScore(item, prev, grooveAfter, favorRemaining, currentMaterials, workshops, dayIndex=0, grooveBefore=0, grooveCapValue=0){
   let score = (item.value / item.time) * 12;
   const eff = efficient(prev,item);
-  if(eff) score += 500;
+  if(eff) score += 1400;
   score *= (1 + grooveAfter/100);
 
   if(favorRemaining && favorRemaining[item.id] > 0){
     score += 2500 + favorRemaining[item.id] * 40;
-    if(eff) score += 500;
+    if(eff) score += 900;
   }
 
   if(prev && prev.id===item.id) score -= 5000;
@@ -437,12 +437,24 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
       any=true;
 
       // Pre-rank choices to keep browser search manageable.
+      const hasEfficientChoice=!!st.prev && fits.some(item=>efficient(st.prev,item));
+
       let ranked=fits.map(item=>{
         const isEff=efficient(st.prev,item);
         const grooveAfter=isEff?Math.min(cap,st.groove+workshops):st.groove;
+
+        let rank=candidateBaseScore(
+          item,st.prev,grooveAfter,st.favor,st.materials,workshops,
+          dayIndex,st.groove,cap
+        );
+
+        // v0.39: "あわせて生産" doubles output, so if an efficient
+        // continuation exists, a non-efficient choice needs a very good reason.
+        if(hasEfficientChoice && !isEff) rank -= 2600;
+
         return {
           item,
-          rank:candidateBaseScore(item,st.prev,grooveAfter,st.favor,st.materials,workshops,dayIndex,st.groove,cap),
+          rank,
           overCap:wouldExceedStandardCap(st.materials,item,workshops)
         };
       }).sort((a,b)=>b.rank-a.rank);
@@ -453,7 +465,7 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
         const underCap=ranked.filter(x=>!x.overCap);
         if(underCap.length) ranked=underCap;
       }
-      ranked=ranked.slice(0,10);
+      ranked=ranked.slice(0,7);
 
       for(const {item} of ranked){
         const isEff=efficient(st.prev,item);
@@ -486,11 +498,10 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
 
     bestByKey.clear();
     for(const st of expanded){
-      const matKey=Object.entries(st.materials)
-        .map(([n,q])=>`${MATERIAL_INDEX[n]??n}:${q}`)
-        .sort()
-        .join(".");
-      const key=`${st.time}|${st.prev?st.prev.id:0}|${st.groove}|${favorKey(st.favor)}|${matKey}`;
+      // v0.39: coarse material bucket avoids treating tiny material
+      // differences as completely separate branches.
+      const matLoad=Math.round(materialBurden(st.materials||{})/120);
+      const key=`${st.time}|${st.prev?st.prev.id:0}|${st.groove}|${favorKey(st.favor)}|${matLoad}`;
       const old=bestByKey.get(key);
       if(!old || st.value>old.value) bestByKey.set(key,st);
     }
@@ -637,14 +648,14 @@ function chooseSchedule(){
     effTransitions:0, days:[], produced:{}, materials:{}, daySignatures:[], grooveHistory:[]
   }];
 
-  const WEEK_BEAM=48;
+  const WEEK_BEAM=34;
 
   for(let day=0;day<5;day++){
     let next=[];
     for(const wk of weekBeam){
-      const dayCandidates=daySearch(avail,workshops,cap,wk.groove,wk.favor,wk.materials,60,day);
+      const dayCandidates=daySearch(avail,workshops,cap,wk.groove,wk.favor,wk.materials,38,day);
 
-      for(const dc of dayCandidates.slice(0,12)){
+      for(const dc of dayCandidates.slice(0,9)){
         const produced={...wk.produced};
         for(const sl of dc.slots){
           produced[sl.item.id]=(produced[sl.item.id]||0)+sl.qty;
