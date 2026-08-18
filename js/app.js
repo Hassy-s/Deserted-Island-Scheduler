@@ -355,6 +355,8 @@ function candidateBaseScore(item, prev, grooveAfter, favorRemaining, currentMate
   if(favorRemaining && favorRemaining[item.id] > 0){
     score += 2500 + favorRemaining[item.id] * 40;
     if(eff) score += 900;
+    // v1.1.4: 4h Favor works naturally with days 1-2 groove growth.
+    if(dayIndex<=1 && item.time===4) score += 700;
   }
 
   if(prev && prev.id===item.id) score -= 5000;
@@ -478,8 +480,12 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
       // even without efficient-production doubling. This keeps days 1-2 focused
       // on groove growth. Only when 72h is insufficient may Favor move forward.
       if(dayIndex<=1 && favorEnabled() && canReserveFavorForDays3to5(st.favor,workshops)){
-        const nonFavorFits=fits.filter(i=>(st.favor?.[i.id]||0)<=0);
-        if(nonFavorFits.length) fits=nonFavorFits;
+        // 4h Favor is compatible with the early groove-growth plan, so allow it.
+        // Keep 6h/8h Favor reserved for days 3-5 whenever the late window is sufficient.
+        const earlyAllowedFits=fits.filter(i=>
+          (st.favor?.[i.id]||0)<=0 || i.time===4
+        );
+        if(earlyAllowedFits.length) fits=earlyAllowedFits;
       }
 
       // v0.38 groove-growth rule:
