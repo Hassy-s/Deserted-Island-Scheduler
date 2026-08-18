@@ -402,6 +402,24 @@ function favorPenalty(favor){
   return miss;
 }
 
+function favorHoursNeededConservative(favor,workshops){
+  let hours=0;
+  for(const [idStr,remaining] of Object.entries(favor||{})){
+    if(remaining<=0) continue;
+    const item=ITEMS.find(i=>i.id===+idStr);
+    if(!item) continue;
+    // One normal production of a shared schedule produces `workshops` items.
+    // Ignore efficient-production doubling here: this is intentionally conservative.
+    hours += Math.ceil(remaining/workshops)*item.time;
+  }
+  return hours;
+}
+
+function canReserveFavorForDays3to5(favor,workshops){
+  return favorHoursNeededConservative(favor,workshops)<=72;
+}
+
+
 const DAY_SEARCH_CACHE=new Map();
 
 function compactMaterialKey(materials){
@@ -455,6 +473,15 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
       }
       let fits=avail.filter(i=>st.time+i.time<=24);
 
+      // v1.1.3:
+      // Reserve Favor for days 3-5 whenever the remaining requests fit there
+      // even without efficient-production doubling. This keeps days 1-2 focused
+      // on groove growth. Only when 72h is insufficient may Favor move forward.
+      if(dayIndex<=1 && favorEnabled() && canReserveFavorForDays3to5(st.favor,workshops)){
+        const nonFavorFits=fits.filter(i=>(st.favor?.[i.id]||0)<=0);
+        if(nonFavorFits.length) fits=nonFavorFits;
+      }
+
       // v0.38 groove-growth rule:
       // During days 1-2, use 4h crafts only while current groove is below
       // the CURRENT progression cap (25 / 35 / 45 etc.).
@@ -473,7 +500,19 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
         let practicalPool=fits;
         if(searchMode()==="standard"){
           const underCap=fits.filter(item=>!wouldExceedStandardCap(st.materials,item,workshops));
-          if(underCap.length) practicalPool=underCap;
+          if(dayIndex>=2 && favorEnabled()){
+            const requiredFavor=fits.filter(item=>(st.favor?.[item.id]||0)>0);
+            if(underCap.length || requiredFavor.length){
+              const seen=new Set();
+              practicalPool=[...requiredFavor,...underCap].filter(item=>{
+                if(seen.has(item.id)) return false;
+                seen.add(item.id);
+                return true;
+              });
+            }
+          }else if(underCap.length){
+            practicalPool=underCap;
+          }
         }
 
         const efficientPool=practicalPool.filter(item=>efficient(st.prev,item));
@@ -525,9 +564,29 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
       // Only fall back to over-cap choices if every continuation would exceed a cap.
       if(searchMode()==="standard"){
         const underCap=ranked.filter(x=>!x.overCap);
-        if(underCap.length) ranked=underCap;
+        if(dayIndex>=2 && favorEnabled()){
+          const requiredFavor=ranked.filter(x=>(st.favor?.[x.item.id]||0)>0);
+          if(underCap.length || requiredFavor.length){
+            const seen=new Set();
+            ranked=[...requiredFavor,...underCap].filter(x=>{
+              if(seen.has(x.item.id)) return false;
+              seen.add(x.item.id);
+              return true;
+            }).sort((a,b)=>b.rank-a.rank);
+          }
+        }else if(underCap.length){
+          ranked=underCap;
+        }
       }
-      ranked=ranked.slice(0,6);
+
+      // Keep CPU-friendly branching, but never trim unfinished Favor on days 3-5.
+      if(dayIndex>=2 && favorEnabled()){
+        const requiredRanked=ranked.filter(x=>(st.favor?.[x.item.id]||0)>0);
+        const normalRanked=ranked.filter(x=>(st.favor?.[x.item.id]||0)<=0);
+        ranked=[...requiredRanked,...normalRanked.slice(0,6)];
+      }else{
+        ranked=ranked.slice(0,6);
+      }
 
       for(const {item} of ranked){
         const isEff=efficient(st.prev,item);
@@ -584,8 +643,9 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
     beam=[...bestByKey.values()].sort((a,b)=>{
       // Favor shortfall dominates; then value, then groove, then efficient transitions.
       const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
-      const sa=a.value + a.groove*80 + a.effTransitions*40 - pa*2200 - (a.burden||0);
-      const sb=b.value + b.groove*80 + b.effTransitions*40 - pb*2200 - (b.burden||0);
+      const favorWeight = dayIndex>=2 ? 4200 : 0;
+      const sa=a.value + a.groove*80 + a.effTransitions*40 - pa*favorWeight - (a.burden||0);
+      const sb=b.value + b.groove*80 + b.effTransitions*40 - pb*favorWeight - (b.burden||0);
       return sb-sa;
     }).slice(0,beamWidth);
 
@@ -781,8 +841,13 @@ function chooseSchedule(){
       // Before final day, remaining favors are a strong penalty but not absolute,
       // so optimizer can build groove first when useful.
       const remainingDays=5-(day+1);
-      const aFeasiblePenalty=pa * (remainingDays===0 ? 1000000 : 5000);
-      const bFeasiblePenalty=pb * (remainingDays===0 ? 1000000 : 5000);
+      const favorWeekWeight =
+        day<=1 ? 0 :
+        remainingDays===0 ? 1000000 :
+        remainingDays===1 ? 18000 :
+        9000;
+      const aFeasiblePenalty=pa * favorWeekWeight;
+      const bFeasiblePenalty=pb * favorWeekWeight;
       const burdenA=a.burden ?? practicalBurden(a.materials,a.days);
       const burdenB=b.burden ?? practicalBurden(b.materials,b.days);
 
