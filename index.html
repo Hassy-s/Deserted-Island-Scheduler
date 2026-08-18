@@ -11,7 +11,7 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v1.0</span>
+      <span class="ver">v1.1</span>
     </div>
     <div class="header-actions">
       <button id="generate" class="primary header-generate">⚙ スケジュールを生成</button>
@@ -51,7 +51,7 @@
           <input id="filter" type="text" placeholder="素材名を検索">
           <div id="itemGrid" class="exclude-box" style="margin-top:8px"></div>
           <div id="excludeSummary" class="small" style="margin-top:7px"></div>
-          <div class="small" style="margin-top:3px">現在の開拓ランクで使用する素材だけを表示します。</div>
+          <div class="small" style="margin-top:3px">現在の開拓ランクで実際に入手可能な素材だけを表示します。</div>
         </div>
       </section>
 
@@ -167,6 +167,7 @@
         <ul>
           <li>1日に24時間分を生産し、週5日分の予定を作成します。</li>
           <li>全工房が同じスケジュールになるように生成します。</li>
+          <li>素材の入手進行度も考慮し、現在の開拓ランクで入手できない素材を使う島産品は候補から除外します。</li>
           <li>「あわせて生産」は、特性が1つ以上共通する異なる島産品を連続させた場合に成立します。成立した生産の開始時に、工房1棟につきやる気が+1されます。</li>
           <li>「あわせて生産」が成立する生産は、スケジュール内で緑色の表示にしています。</li>
           <li>1〜2日目は現在の「やる気上限」に達するまで4時間品で育成し、上限到達後は通常探索へ切り替えます。「あわせて生産」は生産数が2倍になるため、成立できる組み合わせを強く優先します。進行度による上限25・35・45などに自動対応し、ねこみみさんのおねがいは絶対達成条件です。</li>

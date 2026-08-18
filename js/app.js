@@ -62,9 +62,19 @@ function autoWorkshops(rank){return rank>=15?4:rank>=5?3:2}
 function itemUsesExcludedMaterial(item){
   return (item.materials||[]).some(m=>excludedMaterials.has(m.name));
 }
+function materialAvailableAtRank(name,rank){
+  const info=MATERIAL_PROGRESS[name];
+  return !!info && rank>=info.minRank;
+}
+function itemMaterialsAvailableAtRank(item,rank){
+  return (item.materials||[]).every(m=>materialAvailableAtRank(m.name,rank));
+}
+function itemAvailableAtRank(item,rank){
+  return item.rank<=rank && itemMaterialsAvailableAtRank(item,rank);
+}
 function available(){
   const rank=+$("#rank").value;
-  return ITEMS.filter(i=>i.rank<=rank&&!itemUsesExcludedMaterial(i))
+  return ITEMS.filter(i=>itemAvailableAtRank(i,rank)&&!itemUsesExcludedMaterial(i))
 }
 function favorEnabled(){return $("#favorOn").checked}
 function fillFavorSelects(){
@@ -72,7 +82,7 @@ function fillFavorSelects(){
   for(const t of [4,6,8]){
     const sel=$("#favor"+t), old=sel.value;
     sel.innerHTML='<option value="">---- 選択してください ----</option>';
-    ITEMS.filter(i=>i.time===t&&i.rank<=rank&&!itemUsesExcludedMaterial(i))
+    ITEMS.filter(i=>i.time===t&&itemAvailableAtRank(i,rank)&&!itemUsesExcludedMaterial(i))
       .sort((a,b)=>collator.compare(a.name,b.name))
       .forEach(i=>{
         const o=document.createElement("option");
@@ -129,10 +139,10 @@ function allMaterials(){
   const rank=+$("#rank").value;
   const map=new Map();
 
-  // Only show materials relevant to products currently unlocked at this rank.
-  for(const item of ITEMS.filter(i=>i.rank<=rank)){
+  // v1.1: 現在の進行度で実際に入手可能な素材だけを表示。
+  for(const item of ITEMS.filter(i=>itemAvailableAtRank(i,rank))){
     for(const m of (item.materials||[])){
-      if(!map.has(m.name)){
+      if(materialAvailableAtRank(m.name,rank) && !map.has(m.name)){
         map.set(m.name,{
           name:m.name,
           type:materialType(m.name)
@@ -144,7 +154,7 @@ function allMaterials(){
   return [...map.values()].sort((a,b)=>collator.compare(a.name,b.name));
 }
 function materialTypeLabel(t){
-  return t==="rare"?"グラナリー":t==="animal"?"飼育動物":t==="crop"?"作物":"採集";
+  return t==="granary"?"グラナリー":t==="animal"?"飼育動物":t==="crop"?"作物":"採集";
 }
 function updateExcludeSummary(){
   const blocked=ITEMS.filter(itemUsesExcludedMaterial).length;
@@ -189,32 +199,13 @@ function addMaterials(total,item,workshops){
 function rawSearchMode(){ return $("#searchModeSelect").value==="max" ? "max" : "standard"; }
 function searchMode(){ return ACTIVE_SEARCH_MODE || rawSearchMode(); }
 
-const RARE_MATERIALS = new Set([
-  "無人島のアリッサム","無人島のガーネット原石","無人島のスプルース原木",
-  "無人島のハンマーヘッド","無人島の銀鉱","無人島のオパール原木",
-  "無人島のグリムシュルーム","無人島の大理石","無人島のスペクトリン",
-  "無人島の金鉱","無人島の水晶塊","無人島の洞窟エビ"
-]);
-
-const CROP_MATERIALS = new Set([
-  "アイルキャベツ","アイルパンプキン","アイルパースニップ","アイルトマト",
-  "アイルコーン","アイルポポト","アイルオニオン","アイル小麦",
-  "アイルラナービーンズ","アイルビーツ","アイルエッグプラント","アイルブロッコリー",
-  "アイルラディッシュ","アイルズッキーニ","アイルスイートポポト",
-  "アイルバッファロービーン","アイルリーキ","アイルウォーターメロン"
-]);
-
-function isAnimalMaterial(name){ return name.startsWith("飼育動物の"); }
 function materialType(name){
-  if(RARE_MATERIALS.has(name)) return "rare";
-  if(isAnimalMaterial(name)) return "animal";
-  if(CROP_MATERIALS.has(name)) return "crop";
-  return "gather";
+  return MATERIAL_PROGRESS[name]?.category || "gather";
 }
 
 function comfortLimit(name){
   const t=materialType(name);
-  if(t==="rare") return 6;
+  if(t==="granary") return 6;
   if(t==="animal") return 10;
   if(t==="crop") return 14;
   return 20;
@@ -222,7 +213,7 @@ function comfortLimit(name){
 
 function typeMultiplier(name){
   const t=materialType(name);
-  if(t==="rare") return 4.0;
+  if(t==="granary") return 4.0;
   if(t==="animal") return 2.2;
   if(t==="crop") return 1.7;
   return 1.0;
@@ -236,7 +227,7 @@ function capValue(id,fallback){
 }
 function standardSoftCap(name){
   const t=materialType(name);
-  if(t==="rare") return capValue("#capGranary",12);
+  if(t==="granary") return capValue("#capGranary",12);
   if(t==="animal") return capValue("#capAnimal",16);
   if(t==="crop") return capValue("#capCrop",20);
   return capValue("#capGather",25);
@@ -996,9 +987,9 @@ function renderMaterials(){
     const t=materialType(name);
     const limit=comfortLimit(name);
     const cls=qty>limit+12?"very-heavy":qty>limit?"heavy":"";
-    let hint=t==="rare"?"グラナリー":t==="animal"?"飼育":t==="crop"?"作物":"採集";
+    let hint=t==="granary"?"グラナリー":t==="animal"?"飼育":t==="crop"?"作物":"採集";
     return `<div class="material-card ${cls}">
-      <span class="mname">${t==="rare"?"⚠ ":""}${name} <span class="pill">${hint}</span></span>
+      <span class="mname">${t==="granary"?"⚠ ":""}${name} <span class="pill">${hint}</span></span>
       <span class="mqty">×${qty}</span>
     </div>`;
   }).join("");
