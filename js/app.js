@@ -354,9 +354,22 @@ function candidateBaseScore(item, prev, grooveAfter, favorRemaining, currentMate
 
   if(favorRemaining && favorRemaining[item.id] > 0){
     score += 2500 + favorRemaining[item.id] * 40;
-    if(eff) score += 900;
-    // v1.1.4: 4h Favor works naturally with days 1-2 groove growth.
-    if(dayIndex<=1 && item.time===4) score += 700;
+
+    // v1.1.5: one efficient craft with 4 workshops produces 8 items,
+    // enough to finish any of the 4h/6h/8h Favor requests in one placement.
+    // Therefore Favor is strongly preferred AFTER a compatible setup item.
+    if(eff){
+      score += 5200;
+    }else if(prev){
+      score -= 2600;
+    }else{
+      // Do not waste a Favor target in the first slot of a day when it cannot
+      // receive efficient-production bonus. It remains legal as a fallback.
+      score -= 3600;
+    }
+
+    // 4h Favor remains welcome during days 1-2 because it fits groove growth.
+    if(dayIndex<=1 && item.time===4) score += 900;
   }
 
   if(prev && prev.id===item.id) score -= 5000;
@@ -459,7 +472,8 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
   // Beam-search all 24h sequences. State contains time, prev, groove, favor remaining and value.
   let beam=[{
     time:0, prev:null, groove:startGroove, favor:cloneFavor(startFavor),
-    value:0, effTransitions:0, slots:[], materials:{...startMaterials}, dayMaterials:{},
+    value:0, effTransitions:0, favorEffCompletions:0,
+    slots:[], materials:{...startMaterials}, dayMaterials:{},
     burden:materialBurden(startMaterials||{})
   }];
 
@@ -523,15 +537,10 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
 
         const efficientPool=practicalPool.filter(item=>efficient(st.prev,item));
         if(efficientPool.length){
-          const requiredFavor=practicalPool.filter(item=>
-            !efficient(st.prev,item) && (st.favor?.[item.id]||0)>0
-          );
-          const seen=new Set();
-          fits=[...efficientPool,...requiredFavor].filter(item=>{
-            if(seen.has(item.id)) return false;
-            seen.add(item.id);
-            return true;
-          });
+          // v1.1.5: when an efficient continuation exists, stay on efficient
+          // production. This prevents an unfinished Favor from being inserted
+          // non-efficiently (4 items) when it can instead be completed as 8.
+          fits=efficientPool;
         }else{
           fits=practicalPool;
         }
@@ -601,7 +610,9 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
         const qty=workshops*(isEff?2:1);
         const value=Math.round(item.value*qty*(1+grooveAfter/100));
         const favor=cloneFavor(st.favor);
+        const favorBefore=st.favor?.[item.id]||0;
         applyProductionToFavor(favor,item.id,qty);
+        const favorCompletedEfficiently = isEff && favorBefore>0 && (favor[item.id]||0)===0;
         const materials=addMaterials(st.materials,item,workshops);
         const dayMaterials=addMaterials(st.dayMaterials,item,workshops);
         const burden=materialBurden(materials);
@@ -612,6 +623,7 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
           favor,
           value:st.value+value,
           effTransitions:st.effTransitions+(isEff?1:0),
+          favorEffCompletions:(st.favorEffCompletions||0)+(favorCompletedEfficiently?1:0),
           materials,
           dayMaterials,
           burden,
@@ -650,8 +662,8 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
       // Favor shortfall dominates; then value, then groove, then efficient transitions.
       const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
       const favorWeight = dayIndex>=2 ? 4200 : 0;
-      const sa=a.value + a.groove*80 + a.effTransitions*40 - pa*favorWeight - (a.burden||0);
-      const sb=b.value + b.groove*80 + b.effTransitions*40 - pb*favorWeight - (b.burden||0);
+      const sa=a.value + a.groove*80 + a.effTransitions*40 + (a.favorEffCompletions||0)*1800 - pa*favorWeight - (a.burden||0);
+      const sb=b.value + b.groove*80 + b.effTransitions*40 + (b.favorEffCompletions||0)*1800 - pb*favorWeight - (b.burden||0);
       return sb-sa;
     }).slice(0,beamWidth);
 
@@ -693,12 +705,11 @@ function phaseItemBias(item, prev, dayIndex, groove, cap){
 function favorPlacementBias(item, favorRemaining, dayIndex, groove, cap){
   if(!favorEnabled() || !favorRemaining?.[item.id]) return 0;
 
-  // Favor completion is mandatory elsewhere in the algorithm.
-  // Here we only make a very small placement preference:
-  // 4h items fit early chains well, longer items are slightly preferred later.
-  if(dayIndex<=1 && item.time===4) return 90;
-  if(dayIndex>=2 && item.time>=6) return 70;
-  return 0;
+  // v1.1.5: Favor should preferably be completed by efficient production.
+  // The actual efficient check is applied in candidateBaseScore where `prev` exists.
+  if(dayIndex<=1 && item.time===4) return 180;
+  if(dayIndex>=2 && item.time>=6) return 180;
+  return 80;
 }
 
 
