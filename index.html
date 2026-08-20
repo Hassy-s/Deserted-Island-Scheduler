@@ -11,12 +11,10 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v1.1.5</span>
+      <span class="ver">v1.1.6</span>
     </div>
     <div class="header-actions">
       <button id="generate" class="primary header-generate">⚙ スケジュールを生成</button>
-      <button id="saveBtn" class="olive">設定を保存</button>
-      <button id="reset" class="secondary">設定をリセット</button>
     </div>
   </div>
   <div class="small" style="margin:-4px 0 12px 4px">※ ゲーム内の需要・人気度は考慮せず、島産品の基本価値と週間の素材負担をもとに計算しています。「今週分を確定」すると素材の使用履歴が保存され、次週以降は使用素材が偏りにくくなります。</div>
@@ -107,6 +105,10 @@
               <option value="4">4（やる気上限35）</option>
               <option value="5">5（やる気上限45）</option>
             </select>
+          </div>
+          <div class="progress-actions" style="display:flex;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid #ded9cb">
+            <button id="saveBtn" class="olive" style="flex:1">設定を保存</button>
+            <button id="reset" class="secondary" style="flex:1">設定をリセット</button>
           </div>
           </div>
         </details>
