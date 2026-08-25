@@ -11,13 +11,11 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v1.2.3</span>
+      <span class="ver">v1.3.1</span>
     </div>
-    <div class="header-actions">
-      <button id="generate" class="primary header-generate">⚙ スケジュールを生成</button>
-    </div>
+
   </div>
-  <div class="small" style="margin:-4px 0 12px 4px">※ ゲーム内の需要・人気度は考慮せず、島産品の基本価値と週間の素材負担をもとに計算しています。「今週分を確定」すると素材の使用履歴が保存され、次週以降は使用素材が偏りにくくなります。</div>
+  <div class="header-note">※ ゲーム内の需要・人気度は考慮せず、島産品の基本価値と週間の素材負担をもとに計算しています。「今週分を確定」すると素材の使用履歴が保存され、次週以降は使用素材が偏りにくくなります。<br><span class="header-note-action">生成したスケジュールの島産品をクリックすると、置き換え候補を表示できます。</span></div>
 
   <div class="layout">
     <aside>
@@ -36,11 +34,27 @@
         </div>
       </section>
 
-<section class="panel">
-        <div class="panel-title">除外設定</div>
+      <div class="generate-row">
+        <button id="generate" class="primary main-generate">⚙ スケジュールを生成</button>
+        <div id="generateStatus" class="small generate-status"></div>
+      </div>
+
+      <section class="panel wanted-panel">
+        <details id="wantedDetails">
+          <summary class="panel-title wanted-summary">作りたい制作物 <span id="wantedCount" class="summary-count">0件選択</span></summary>
+          <div class="panel-body">
+            <div class="small wanted-help">ゲーム内で需要や供給を確認し、優先して使用したい制作物がある場合に選択してください。可能な範囲でスケジュールへの組み込みを優先します。</div>
+            <input id="wantedFilter" type="text" placeholder="制作物名を検索">
+            <div id="wantedGrid" class="exclude-box wanted-box" style="margin-top:8px"></div>
+          </div>
+        </details>
+      </section>
+
+<section class="panel exclude-panel">
+        <details id="excludeDetails">
+          <summary class="panel-title exclude-summary">使いたくない素材 <span id="excludeCount" class="summary-count">0件除外</span></summary>
         <div class="panel-body">
           <div class="exclude-head exclude-head-compact">
-            <div class="exclude-title">使いたくない素材</div>
             <div class="exclude-actions">
               <button class="secondary" id="allOn">すべて除外</button>
               <button class="secondary" id="allOff">除外をすべて解除</button>
@@ -51,6 +65,7 @@
           <div id="excludeSummary" class="small" style="margin-top:7px"></div>
           <div class="small" style="margin-top:3px">現在の開拓ランクで実際に入手可能な素材だけを表示します。</div>
         </div>
+        </details>
       </section>
 
 <section class="panel search-panel">
@@ -77,7 +92,6 @@
             <div class="small" style="margin-top:7px">標準検索で、この数を超える素材の追加使用をできるだけ避けます。</div>
           </div>
 
-          <div id="generateStatus" class="small" style="margin-top:8px;min-height:18px"></div>
           </div>
         </details>
       </section>
@@ -172,16 +186,18 @@
       <div class="info-box">
         <h3>スケジュールについて</h3>
         <ul>
-          <li>1日に24時間分を生産し、週5日分の予定を作成します。</li>
-          <li>全工房が同じスケジュールになるように生成します。</li>
-          <li>素材の入手進行度も考慮し、現在の開拓ランクで入手できない素材を使う島産品は候補から除外します。</li>
-          <li>「あわせて生産」は、特性が1つ以上共通する異なる島産品を連続させた場合に成立します。成立した生産の開始時に、工房1棟につきやる気が+1されます。</li>
-          <li>「あわせて生産」が成立する生産は、スケジュール内で緑色の表示にしています。</li>
-          <li>1〜2日目は現在の「やる気上限」に達するまで4時間品で育成し、上限到達後は通常探索へ切り替えます。「あわせて生産」は生産数が2倍になるため、成立できる組み合わせを強く優先します。進行度による上限25・35・45などに自動対応し、ねこみみさんのおねがいは絶対達成条件です。</li>
-          <li>ねこみみさんのおねがいを使用する場合は絶対達成条件です。完成個数は通常＝工房数×1、あわせて生産＝工房数×2として集計します。</li>
-          <li>概算青船貨獲得数には「工房のやる気」を反映しています。ゲーム内の人気・需要・供給変化は考慮していないため、実際の獲得数とは異なります。</li>
-          <li>標準検索では最高効率付近の候補から素材負担の軽い案を優先します。</li>
-          <li>素材仕様履歴は8週分（8回確定分）保存され、スケジュール生成に反映されます。</li>
+          <li>1日24時間分、全工房共通のスケジュールを週5日分生成します。</li>
+          <li>開拓ランクに応じて、入手できない素材を使う島産品は候補から除外します。</li>
+          <li>生成後は島産品をクリックして、同じ製作時間の島産品へ置き換えられます。</li>
+          <li>青船貨の概算には「やる気」を反映しますが、人気・需要・供給は考慮しません。</li>
+        </ul>
+        <div class="info-divider"></div>
+        <h3 class="algo-title">生成アルゴリズム</h3>
+        <ul>
+          <li>1〜2日目は4時間品を中心に「やる気」を育成し、あわせて生産を強く優先します。</li>
+          <li>ねこみみさんのおねがいを有効にしている場合、必須条件として生成します。</li>
+          <li>作りたい制作物を優先しつつ、青船貨と素材負担のバランスが良いスケジュールを探索します。</li>
+          <li>標準検索では素材の使用目安と過去8週の使用履歴を考慮し、素材の偏りを抑えます。</li>
         </ul>
       </div>
     </main>

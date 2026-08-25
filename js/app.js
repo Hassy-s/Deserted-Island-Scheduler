@@ -43,7 +43,7 @@ function historyMaterialPenalty(item,workshops){
   return p;
 }
 
-let excludedMaterials=new Set(), LAST=null, activeDay=0;
+let excludedMaterials=new Set(), wantedItems=new Set(), LAST=null, activeDay=0;
 let EDIT_UNDO=[], EDIT_REDO=[];
 let REPLACE_CTX=null, REPLACE_SHOW_ALL=false;
 const HISTORY_REDO_KEY="island_workshop_scheduler_history_redo_v1";
@@ -52,6 +52,7 @@ const HISTORY_REDO_KEY="island_workshop_scheduler_history_redo_v1";
 let ACTIVE_SEARCH_MODE=null;
 let ACTIVE_CAPS=null;
 let ACTIVE_HISTORY_MATERIALS=null;
+let ACTIVE_WANTED_ITEMS=null;
 
 const $=s=>document.querySelector(s);
 const collator=new Intl.Collator("ja");
@@ -105,6 +106,7 @@ function save(){
     workshops:+$("#workshops").value,
     landmarks:+$("#landmarks").value,
     excludedMaterials:[...excludedMaterials],
+    wantedItems:[...wantedItems],
     favor:favorEnabled(),
     searchMode:searchMode(),
     capGather:+$("#capGather").value,
@@ -127,6 +129,7 @@ function load(){
     if(s.workshops)$("#workshops").value=s.workshops;
     if(s.landmarks)$("#landmarks").value=s.landmarks;
     excludedMaterials=new Set(s.excludedMaterials||[]);
+    wantedItems=new Set((s.wantedItems||[]).map(Number));
     $("#favorOn").checked=!!s.favor;
     $("#favorOff").checked=!s.favor;
     $("#favors").classList.toggle("on",!!s.favor);
@@ -141,7 +144,9 @@ function load(){
     if(s.capGranary!==undefined)$("#capGranary").value=s.capGranary
   }catch(e){}
   renderExclude();
-  updateExcludeSummary()
+  updateExcludeSummary();
+  renderWanted();
+  updateWantedSummary()
 }
 function allMaterials(){
   const rank=+$("#rank").value;
@@ -167,6 +172,7 @@ function materialTypeLabel(t){
 function updateExcludeSummary(){
   const blocked=ITEMS.filter(itemUsesExcludedMaterial).length;
   $("#excludeSummary").textContent=`除外素材：${excludedMaterials.size}件 / 対象外になる島産品：${blocked}品 / 現在使用可能：${available().length}品`;
+  const count=$("#excludeCount"); if(count) count.textContent=`${excludedMaterials.size}件除外`;
 }
 function renderExclude(){
   const q=$("#filter").value.trim(),grid=$("#itemGrid");
@@ -185,10 +191,70 @@ function renderExclude(){
   grid.querySelectorAll("input").forEach(cb=>cb.onchange=()=>{
     const name=cb.dataset.name;
     cb.checked?excludedMaterials.add(name):excludedMaterials.delete(name);
-    updateExcludeSummary();fillFavorSelects();save()
+    updateExcludeSummary();fillFavorSelects();
+    const visibleWanted=new Set(wantedAvailableItems().map(i=>i.id));
+    wantedItems=new Set([...wantedItems].filter(id=>visibleWanted.has(id)));
+    renderWanted();updateWantedSummary();save()
   })
 }
 
+
+function wantedAvailableItems(){
+  const rank=+$("#rank").value;
+  return ITEMS.filter(i=>itemAvailableAtRank(i,rank)&&!itemUsesExcludedMaterial(i))
+    .sort((a,b)=>collator.compare(a.name,b.name));
+}
+function updateWantedSummary(){
+  const el=$("#wantedCount");
+  if(el) el.textContent=`${wantedItems.size}件選択`;
+}
+function renderWanted(){
+  const grid=$("#wantedGrid");
+  if(!grid) return;
+  const q=$("#wantedFilter").value.trim();
+  grid.innerHTML="";
+  wantedAvailableItems().filter(i=>!q||i.name.includes(q)).forEach(item=>{
+    const d=document.createElement("label");
+    d.className="itemcheck wantedcheck";
+    d.innerHTML=`<input type="checkbox" ${wantedItems.has(item.id)?"checked":""} data-id="${item.id}">
+      <span class="iname">${item.name}</span><span class="pill">${item.time}H</span>`;
+    grid.appendChild(d);
+  });
+  grid.querySelectorAll("input").forEach(cb=>cb.onchange=()=>{
+    const id=+cb.dataset.id;
+    cb.checked?wantedItems.add(id):wantedItems.delete(id);
+    updateWantedSummary();save();
+  });
+}
+function wantedEfficientIds(days){
+  const found=new Set();
+  if(!ACTIVE_WANTED_ITEMS || !ACTIVE_WANTED_ITEMS.size) return found;
+  for(const day of (days||[])){
+    for(const slot of (day||[])){
+      if(slot.eff && ACTIVE_WANTED_ITEMS.has(slot.item.id)) found.add(slot.item.id);
+    }
+  }
+  return found;
+}
+function wantedWeekBonus(days){
+  // v1.3.1:
+  // "作りたい制作物" earns a preference ONLY when it is actually produced
+  // with あわせて生産. It never receives a weekly bonus merely for being
+  // forced into a non-efficient slot.
+  return wantedEfficientIds(days).size*1100;
+}
+function wantedSetupBonus(item){
+  // Reverse-plan toward a selected product: modestly prefer an item that can
+  // serve as the immediately preceding setup for a wanted product.
+  // This helps build "前置き品 → 作りたい制作物" without ever overriding
+  // the structural preference for current efficient production.
+  if(!ACTIVE_WANTED_ITEMS || !ACTIVE_WANTED_ITEMS.size) return 0;
+  for(const id of ACTIVE_WANTED_ITEMS){
+    const wanted=ITEMS.find(i=>i.id===id);
+    if(wanted && wanted.id!==item.id && efficient(item,wanted)) return 420;
+  }
+  return 0;
+}
 
 function grooveCap(){
   const lm=+$("#landmarks").value;
@@ -376,6 +442,16 @@ function candidateBaseScore(item, prev, grooveAfter, favorRemaining, currentMate
     // 4h Favor remains welcome during days 1-2 because it fits groove growth.
     if(dayIndex<=1 && item.time===4) score += 900;
   }
+
+  if(ACTIVE_WANTED_ITEMS?.has(item.id) && eff){
+    // Wanted products are preferred only inside an already-valid efficient chain.
+    score += 900;
+  }
+
+  // Small reverse-planning nudge for a setup item that can lead into a wanted
+  // product on the next craft. This is deliberately weaker than the normal
+  // あわせて生産 bonus (+1400 above).
+  score += wantedSetupBonus(item);
 
   if(prev && prev.id===item.id) score -= 5000;
 
@@ -784,6 +860,7 @@ function chooseSchedule(){
     "#capGranary":+$("#capGranary").value
   };
   ACTIVE_HISTORY_MATERIALS=ACTIVE_SEARCH_MODE==="standard" ? weightedHistoryMaterials() : {};
+  ACTIVE_WANTED_ITEMS=new Set([...wantedItems].filter(id=>ITEMS.some(i=>i.id===id)));
 
   const avail=available();
   if(!avail.length) throw new Error("使用可能な島産品がありません。");
@@ -876,12 +953,12 @@ function chooseSchedule(){
       if(searchMode()==="standard"){
         // Standard mode: material burden dominates.
         // Value/groove only break ties between similarly easy schedules.
-        const sa = -(burdenA*4.5) + a.value*0.24 + a.groove*70 + a.effTransitions*12 - aFeasiblePenalty;
-        const sb = -(burdenB*4.5) + b.value*0.24 + b.groove*70 + b.effTransitions*12 - bFeasiblePenalty;
+        const sa = -(burdenA*4.5) + a.value*0.24 + a.groove*70 + a.effTransitions*12 + wantedWeekBonus(a.days) - aFeasiblePenalty;
+        const sb = -(burdenB*4.5) + b.value*0.24 + b.groove*70 + b.effTransitions*12 + wantedWeekBonus(b.days) - bFeasiblePenalty;
         return sb-sa;
       }else{
-        const sa=a.value + a.groove*95 + a.effTransitions*30 - aFeasiblePenalty;
-        const sb=b.value + b.groove*95 + b.effTransitions*30 - bFeasiblePenalty;
+        const sa=a.value + a.groove*95 + a.effTransitions*30 + wantedWeekBonus(a.days) - aFeasiblePenalty;
+        const sb=b.value + b.groove*95 + b.effTransitions*30 + wantedWeekBonus(b.days) - bFeasiblePenalty;
         return sb-sa;
       }
     });
@@ -906,8 +983,8 @@ function chooseSchedule(){
         }
 
         if(searchMode()==="standard"){
-          const oldScore=old.value-materialStateBurdenForBeam(old)*3.5;
-          const newScore=wk.value-materialStateBurdenForBeam(wk)*3.5;
+          const oldScore=old.value-materialStateBurdenForBeam(old)*3.5+wantedWeekBonus(old.days);
+          const newScore=wk.value-materialStateBurdenForBeam(wk)*3.5+wantedWeekBonus(wk.days);
           if(newScore>oldScore) dedup.set(key,wk);
         }else{
           if(wk.value>old.value) dedup.set(key,wk);
@@ -919,8 +996,8 @@ function chooseSchedule(){
         if(day===4 && pa!==pb) return pa-pb;
 
         if(searchMode()==="standard"){
-          const sa=a.value-materialStateBurdenForBeam(a)*3.5;
-          const sb=b.value-materialStateBurdenForBeam(b)*3.5;
+          const sa=a.value-materialStateBurdenForBeam(a)*3.5+wantedWeekBonus(a.days);
+          const sb=b.value-materialStateBurdenForBeam(b)*3.5+wantedWeekBonus(b.days);
           return sb-sa;
         }
         return b.value-a.value;
@@ -950,7 +1027,7 @@ function chooseSchedule(){
 
   let best;
   if(searchMode()==="max"){
-    best=candidates.slice().sort((a,b)=>b.value-a.value)[0];
+    best=candidates.slice().sort((a,b)=>(b.value+wantedWeekBonus(b.days))-(a.value+wantedWeekBonus(a.days)))[0];
   }else{
     best=candidates.slice().sort((a,b)=>{
       const burdenA=a.burden ?? practicalBurden(a.materials,a.days);
@@ -958,8 +1035,8 @@ function chooseSchedule(){
 
       // Final decision uses the actually calculated five-day value.
       // No future-value estimate is used here.
-      const scoreA=a.value-burdenA*3.5;
-      const scoreB=b.value-burdenB*3.5;
+      const scoreA=a.value-burdenA*3.5+wantedWeekBonus(a.days);
+      const scoreB=b.value-burdenB*3.5+wantedWeekBonus(b.days);
       return scoreB-scoreA;
     })[0];
   }
@@ -1233,6 +1310,9 @@ $("#rank").addEventListener("change",()=>{
   renderExclude();
   fillFavorSelects();
   updateExcludeSummary();
+  const visibleWanted=new Set(wantedAvailableItems().map(i=>i.id));
+  wantedItems=new Set([...wantedItems].filter(id=>visibleWanted.has(id)));
+  renderWanted();updateWantedSummary();
   save();
 });
 $("#workshops").addEventListener("change",save);
@@ -1247,8 +1327,9 @@ $("#favorOff").addEventListener("change",()=>{
 $("#searchModeSelect").addEventListener("change",save);
 ["#capGather","#capCrop","#capAnimal","#capGranary"].forEach(sel=>$(sel).addEventListener("change",save));
 $("#filter").oninput=renderExclude;
-$("#allOn").onclick=()=>{allMaterials().forEach(m=>excludedMaterials.add(m.name));renderExclude();updateExcludeSummary();fillFavorSelects();save()};
-$("#allOff").onclick=()=>{excludedMaterials.clear();renderExclude();updateExcludeSummary();fillFavorSelects();save()};
+$("#wantedFilter").oninput=renderWanted;
+$("#allOn").onclick=()=>{allMaterials().forEach(m=>excludedMaterials.add(m.name));renderExclude();updateExcludeSummary();fillFavorSelects();wantedItems.clear();renderWanted();updateWantedSummary();save()};
+$("#allOff").onclick=()=>{excludedMaterials.clear();renderExclude();updateExcludeSummary();fillFavorSelects();renderWanted();updateWantedSummary();save()};
 $("#confirmWeek").onclick=()=>{
   if(!LAST || !LAST.materials){
     $("#historyStatus").textContent="先にスケジュールを生成してください。";
@@ -1335,7 +1416,7 @@ $("#generate").onclick=()=>{
 };
 $("#saveBtn").onclick=()=>{save();alert("設定を保存しました。")};
 $("#reset").onclick=()=>{
-  localStorage.removeItem(STORAGE_KEY);excludedMaterials.clear();
+  localStorage.removeItem(STORAGE_KEY);excludedMaterials.clear();wantedItems.clear();
   $("#rank").value=5;$("#workshops").value=3;$("#landmarks").value=2;
   $("#favorOff").checked=true;$("#favorOn").checked=false;$("#favors").classList.remove("on");$("#searchModeSelect").value="standard";$("#capGather").value=25;$("#capCrop").value=20;$("#capAnimal").value=16;$("#capGranary").value=12;
   fillFavorSelects();renderExclude();updateExcludeSummary();
