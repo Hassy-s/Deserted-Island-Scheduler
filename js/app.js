@@ -1054,7 +1054,8 @@ function recalculateManualSchedule(){
 function replacementFit(prev,item,next){
   const before=!!prev&&efficient(prev,item);
   const after=!!next&&efficient(item,next);
-  return {before,after,score:(before?1:0)+(after?1:0)};
+  const rank=before&&after?3:before?2:after?1:0;
+  return {before,after,rank};
 }
 function closeReplacePopover(){
   const p=$("#replacePopover"); if(p)p.hidden=true;
@@ -1085,18 +1086,18 @@ function replacementCandidates(){
   return available()
     .filter(i=>i.id!==current.id && i.time===current.time)
     .map(item=>({item,fit:replacementFit(prev,item,next)}))
-    .sort((a,b)=>b.fit.score-a.fit.score || b.item.value-a.item.value || collator.compare(a.item.name,b.item.name));
+    .sort((a,b)=>b.fit.rank-a.fit.rank || b.item.value-a.item.value || collator.compare(a.item.name,b.item.name));
 }
 function renderReplacementCandidates(){
   if(!REPLACE_CTX)return;
   const all=replacementCandidates(),shown=REPLACE_SHOW_ALL?all:all.slice(0,6);
   $("#replaceCandidates").innerHTML=shown.length?shown.map(({item,fit})=>{
-    const cls=fit.score===2?"both":fit.score===1?"one":"none";
-    const mark=fit.score===2?"◎":fit.before?"○":fit.after?"△":"×";
-    const text=fit.score===2?"前後一致":fit.before?"手前一致":fit.after?"後ろ一致":"一致しない";
+    const cls=fit.rank===3?"both":fit.rank===2?"before":fit.rank===1?"after":"none";
+    const mark=fit.rank===3?"◎":fit.rank===2?"○":fit.rank===1?"△":"×";
+    const text=fit.rank===3?"前後一致":fit.rank===2?"手前一致":fit.rank===1?"後ろ一致":"一致なし";
     return `<button class="replace-candidate" data-id="${item.id}">
       <span class="replace-fit ${cls}" title="${text}">${mark}</span>
-      <span><div class="replace-candidate-name">${item.name}</div><div class="replace-candidate-meta">${item.cats.join(" / ")} ・ ${text}</div></span>
+      <span><div class="replace-candidate-name">${item.name}</div><div class="replace-candidate-meta">${item.cats.join(" / ")}</div></span>
       <span class="replace-candidate-time">${item.time}H</span>
     </button>`;
   }).join(""):`<div class="replace-empty">条件に合う候補がありません。</div>`;
