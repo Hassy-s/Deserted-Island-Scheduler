@@ -1232,9 +1232,12 @@ function renderSummary(){
       return `${item.time}h ${got}/${need}`;
     }).join(" / ");
   }
+
   const status = favorEnabled()
-    ? (unmet.length?'<span class="status-warn">⚠ お願い未達</span>':'<span class="status-ok">✓ お願い達成</span>')
-    : '<span class="status-ok">✓ 条件内で生成</span>';
+    ? (unmet.length
+        ? '<span class="status-warn">⚠ 未達</span>'
+        : '<span class="status-ok">✓ 達成</span>')
+    : '<span class="status-neutral">使用しない</span>';
 
   $("#summary").innerHTML=`
     <div class="summary-card">
@@ -1257,10 +1260,12 @@ function renderSummary(){
       <div class="sub">売上 +${LAST.groove}%</div>
     </div>
     <div class="summary-card status">
-      <div class="label">制約の達成状況</div>
-      <div class="value" style="font-size:16px">${status}</div>${favorProgress?`<div class="sub">${favorProgress}</div>`:""}
+      <div class="label">ねこみみ達成状況</div>
+      <div class="value summary-status-value">${status}</div>
+      ${favorProgress?`<div class="sub">${favorProgress}</div>`:""}
     </div>`;
-}function renderTabs(){
+}
+function renderTabs(){
   $("#tabs").style.display="grid";
   $("#tabs").innerHTML=[0,1,2,3,4].map(i=>`<button class="day-tab ${i===0?"active":""}" data-day="${i}">${i+1}日目</button>`).join("");
   $("#tabs").querySelectorAll("button").forEach(b=>b.onclick=()=>renderDay(+b.dataset.day))
@@ -1425,7 +1430,7 @@ $("#reset").onclick=()=>{
     <div class="summary-card coin-card"><div class="label">概算青船貨獲得数</div><div class="value">-</div><div class="sub">青船貨（目安）</div></div>
     <div class="summary-card"><div class="label">あわせて生産回数</div><div class="value">-</div></div>
     <div class="summary-card"><div class="label">やる気</div><div class="value">-</div></div>
-    <div class="summary-card status"><div class="label">制約の達成状況</div><div class="value">未生成</div></div>`;
+    <div class="summary-card status"><div class="label">ねこみみ達成状況</div><div class="value">未生成</div></div>`;
   $("#scheduleBody").innerHTML=`<tr><td colspan="7" style="text-align:center;color:#777;padding:30px">条件を設定して「スケジュールを生成」を押してください。</td></tr>`;
   $("#tabs").style.display="none";
   $("#materialPanel").style.display="none";

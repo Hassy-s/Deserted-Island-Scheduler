@@ -688,3 +688,24 @@ details:not([open])>summary.panel-title::after{
   transform:none!important;
 }
 .muted-constraint{color:#6f695e;font-weight:700}
+
+
+/* v1.3.3 summary alignment */
+.summary-card{
+  display:flex!important;
+  flex-direction:column!important;
+  align-items:center!important;
+  justify-content:center!important;
+  text-align:center!important;
+}
+.summary-card .label,
+.summary-card .value,
+.summary-card .sub{
+  width:100%;
+  text-align:center!important;
+  margin-left:auto!important;
+  margin-right:auto!important;
+}
+.summary-card .sub{line-height:1.35}
+.summary-status-value{font-size:18px!important;line-height:1.3!important}
+.status-neutral{color:#6e685d;font-weight:700}
