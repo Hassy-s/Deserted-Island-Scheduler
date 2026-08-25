@@ -11,7 +11,7 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v1.2.0</span>
+      <span class="ver">v1.2.2</span>
     </div>
     <div class="header-actions">
       <button id="generate" class="primary header-generate">⚙ スケジュールを生成</button>
@@ -192,16 +192,18 @@
 <div id="replacePopover" class="replace-popover" hidden>
   <div class="replace-popover-head">
     <div>
-      <div class="replace-kicker">島産品を置き換え</div>
-      <strong id="replaceTitle"></strong>
+      <div class="replace-kicker">REPLACE</div>
+      <strong class="replace-main-title">島産品の置き換え</strong>
+      <div id="replaceTitle" class="replace-current-title"></div>
     </div>
     <button id="replaceClose" class="replace-close" aria-label="閉じる">×</button>
   </div>
-  <div class="replace-search-wrap">
-    <span>⌕</span><input id="replaceSearch" type="text" placeholder="島産品名を検索">
+  <div class="replace-legend">
+    <span><b class="legend-both">◎</b> 前後一致</span>
+    <span><b class="legend-one">○</b> 手前一致</span>
+    <span><b class="legend-none">－</b> 一致しない</span>
   </div>
-  <div id="replaceCats" class="replace-cats"></div>
-  <div class="replace-note">24時間を維持するため、同じ製作時間の島産品から検索します。</div>
+  <div class="replace-note">同じ製作時間の候補を、あわせて生産を維持しやすい順に表示します。</div>
   <div id="replaceCandidates" class="replace-candidates"></div>
   <button id="replaceShowAll" class="replace-show-all" hidden></button>
 </div>

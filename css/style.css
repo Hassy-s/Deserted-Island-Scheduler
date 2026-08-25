@@ -576,3 +576,13 @@ button:disabled{opacity:.65;cursor:wait}
 .replace-candidate-time{font-size:11px;font-weight:700;color:#756e61}
 .replace-show-all{width:100%;margin-top:9px;border:0;background:transparent;color:#6f7655;font-weight:700;font-size:11px;cursor:pointer;padding:7px}
 .replace-empty{text-align:center;color:#9a9387;font-size:12px;padding:18px 8px}
+
+/* v1.2.1 simplified replacement */
+.replace-main-title{display:block;font-size:18px;line-height:1.25;color:#353128;letter-spacing:.01em}
+.replace-current-title{margin-top:5px;font-size:11px;color:#8c8576;font-weight:600}
+.replace-legend{display:flex;flex-direction:column;gap:5px;margin:9px 0 10px;padding:9px 10px;border-radius:10px;background:#f8f7f2;border:1px solid #e8e3d8;font-size:10px;color:#70695d}
+.replace-legend span{display:flex;align-items:center;gap:7px}
+.replace-legend b{display:inline-block;width:18px;text-align:center;font-size:13px}
+.legend-both{color:#688052}.legend-one{color:#a78a42}.legend-none{color:#aaa397}
+
+.legend-back{color:#4f7fb8}.legend-none{color:#8d8d8d}

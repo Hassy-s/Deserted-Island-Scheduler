@@ -45,7 +45,7 @@ function historyMaterialPenalty(item,workshops){
 
 let excludedMaterials=new Set(), LAST=null, activeDay=0;
 let EDIT_UNDO=[], EDIT_REDO=[];
-let REPLACE_CTX=null, REPLACE_CATEGORY="", REPLACE_SHOW_ALL=false;
+let REPLACE_CTX=null, REPLACE_SHOW_ALL=false;
 const HISTORY_REDO_KEY="island_workshop_scheduler_history_redo_v1";
 
 // v0.41 generation context: values that are constant during one search.
@@ -212,11 +212,8 @@ function materialType(name){
 }
 
 function comfortLimit(name){
-  const t=materialType(name);
-  if(t==="granary") return 6;
-  if(t==="animal") return 10;
-  if(t==="crop") return 14;
-  return 20;
+  // Search Settings now define the actual material comfort threshold.
+  return standardSoftCap(name);
 }
 
 function typeMultiplier(name){
@@ -1076,32 +1073,17 @@ function openReplacement(dayIndex,slotIndex,row){
   if(!LAST)return;
   const slots=LAST.days[dayIndex],slot=slots[slotIndex];
   REPLACE_CTX={dayIndex,slotIndex,current:slot.item};
-  REPLACE_CATEGORY="";REPLACE_SHOW_ALL=false;
-  $("#replaceTitle").textContent=`${slot.item.name}（${slot.item.time}H）`;
-  $("#replaceSearch").value="";
-  renderReplacementCategories();
+  REPLACE_SHOW_ALL=false;
+  $("#replaceTitle").textContent=`現在：${slot.item.name}（${slot.item.time}H）`;
   renderReplacementCandidates();
   positionReplacePopover(row);
-  setTimeout(()=>$("#replaceSearch").focus(),0);
-}
-function renderReplacementCategories(){
-  if(!REPLACE_CTX)return;
-  const cats=[...new Set(available().filter(i=>i.time===REPLACE_CTX.current.time).flatMap(i=>i.cats))].sort(collator.compare);
-  $("#replaceCats").innerHTML=[`<button class="replace-cat-chip ${REPLACE_CATEGORY===""?"active":""}" data-cat="">すべて</button>`,
-    ...cats.map(c=>`<button class="replace-cat-chip ${REPLACE_CATEGORY===c?"active":""}" data-cat="${c}">${c}</button>`)].join("");
-  $("#replaceCats").querySelectorAll("button").forEach(b=>b.onclick=()=>{
-    REPLACE_CATEGORY=b.dataset.cat;REPLACE_SHOW_ALL=false;renderReplacementCategories();renderReplacementCandidates();
-  });
 }
 function replacementCandidates(){
   if(!REPLACE_CTX)return [];
   const {dayIndex,slotIndex,current}=REPLACE_CTX;
   const day=LAST.days[dayIndex],prev=slotIndex?day[slotIndex-1].item:null,next=slotIndex<day.length-1?day[slotIndex+1].item:null;
-  const q=$("#replaceSearch").value.trim();
   return available()
     .filter(i=>i.id!==current.id && i.time===current.time)
-    .filter(i=>!q||i.name.includes(q))
-    .filter(i=>!REPLACE_CATEGORY||i.cats.includes(REPLACE_CATEGORY))
     .map(item=>({item,fit:replacementFit(prev,item,next)}))
     .sort((a,b)=>b.fit.score-a.fit.score || b.item.value-a.item.value || collator.compare(a.item.name,b.item.name));
 }
@@ -1110,8 +1092,8 @@ function renderReplacementCandidates(){
   const all=replacementCandidates(),shown=REPLACE_SHOW_ALL?all:all.slice(0,6);
   $("#replaceCandidates").innerHTML=shown.length?shown.map(({item,fit})=>{
     const cls=fit.score===2?"both":fit.score===1?"one":"none";
-    const mark=fit.score===2?"◎":fit.score===1?"○":"－";
-    const text=fit.score===2?"前後とも維持":fit.before?"前を維持":fit.after?"後ろを維持":"ボーナスなし";
+    const mark=fit.score===2?"◎":fit.before?"○":fit.after?"△":"×";
+    const text=fit.score===2?"前後一致":fit.before?"手前一致":fit.after?"後ろ一致":"一致しない";
     return `<button class="replace-candidate" data-id="${item.id}">
       <span class="replace-fit ${cls}" title="${text}">${mark}</span>
       <span><div class="replace-candidate-name">${item.name}</div><div class="replace-candidate-meta">${item.cats.join(" / ")} ・ ${text}</div></span>
@@ -1321,7 +1303,6 @@ $("#redoEdit").onclick=()=>{
   closeReplacePopover();
 };
 $("#replaceClose").onclick=closeReplacePopover;
-$("#replaceSearch").oninput=()=>{REPLACE_SHOW_ALL=false;renderReplacementCandidates()};
 $("#replaceShowAll").onclick=()=>{REPLACE_SHOW_ALL=true;renderReplacementCandidates()};
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeReplacePopover()});
 document.addEventListener("click",e=>{
