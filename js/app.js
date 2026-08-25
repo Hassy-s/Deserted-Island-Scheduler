@@ -238,7 +238,7 @@ function wantedEfficientIds(days){
 }
 function wantedWeekBonus(days){
   // v1.3.1:
-  // "作りたい制作物" earns a preference ONLY when it is actually produced
+  // "作りたい島産品" earns a preference ONLY when it is actually produced
   // with あわせて生産. It never receives a weekly bonus merely for being
   // forced into a non-efficient slot.
   return wantedEfficientIds(days).size*1100;
@@ -246,7 +246,7 @@ function wantedWeekBonus(days){
 function wantedSetupBonus(item){
   // Reverse-plan toward a selected product: modestly prefer an item that can
   // serve as the immediately preceding setup for a wanted product.
-  // This helps build "前置き品 → 作りたい制作物" without ever overriding
+  // This helps build "前置き品 → 作りたい島産品" without ever overriding
   // the structural preference for current efficient production.
   if(!ACTIVE_WANTED_ITEMS || !ACTIVE_WANTED_ITEMS.size) return 0;
   for(const id of ACTIVE_WANTED_ITEMS){
