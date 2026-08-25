@@ -663,3 +663,28 @@ details:not([open])>summary.panel-title::after{transform:rotate(-90deg)}
 .exclude-panel .panel-body{padding:12px}
 .info-box .info-divider{height:1px;background:#d8d2c3;margin:14px 0 12px}
 .info-box .algo-title{margin-top:0}
+
+
+/* v1.3.2 settings section + unified foldout controls */
+.settings-section-label{
+  margin:16px 4px 8px;
+  text-align:left;
+  font-size:13px;
+  line-height:1;
+  font-weight:800;
+  color:#4c473e;
+  letter-spacing:.03em;
+}
+summary.panel-title::after{
+  content:"−"!important;
+  transform:none!important;
+  font-size:22px!important;
+  line-height:1!important;
+  font-weight:400!important;
+  opacity:1!important;
+}
+details:not([open])>summary.panel-title::after{
+  content:"＋"!important;
+  transform:none!important;
+}
+.muted-constraint{color:#6f695e;font-weight:700}

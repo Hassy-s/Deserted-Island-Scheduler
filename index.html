@@ -11,11 +11,11 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v1.3.1</span>
+      <span class="ver">v1.3.2</span>
     </div>
 
   </div>
-  <div class="header-note">※ ゲーム内の需要・人気度は考慮せず、島産品の基本価値と週間の素材負担をもとに計算しています。「今週分を確定」すると素材の使用履歴が保存され、次週以降は使用素材が偏りにくくなります。<br><span class="header-note-action">生成したスケジュールの島産品をクリックすると、置き換え候補を表示できます。</span></div>
+  <div class="header-note">※ ゲーム内の需要・人気度は考慮せず、島産品の基本価値と週間の素材負担をもとに計算しています。素材の使用をできるだけ分散し、採取・補充の負担を抑えながら青船貨を稼ぐことを目的としたツールです。「今週分を確定」すると素材の使用履歴が保存され、次週以降も使用素材が偏りにくくなります。<br><span class="header-note-action">生成したスケジュールの島産品をクリックすると、置き換え候補を表示できます。</span></div>
 
   <div class="layout">
     <aside>
@@ -38,6 +38,8 @@
         <button id="generate" class="primary main-generate">⚙ スケジュールを生成</button>
         <div id="generateStatus" class="small generate-status"></div>
       </div>
+
+      <div class="settings-section-label">各種設定</div>
 
       <section class="panel wanted-panel">
         <details id="wantedDetails">
@@ -137,7 +139,7 @@
           <div class="summary-card coin-card"><div class="label">概算青船貨獲得数<small class="estimate-note">需要・人気度を1.5倍として算出</small></div><div class="value">-</div><div class="sub">青船貨（目安）</div></div>
           <div class="summary-card"><div class="label">あわせて生産回数</div><div class="value">-</div></div>
           <div class="summary-card"><div class="label">やる気</div><div class="value">-</div></div>
-          <div class="summary-card status"><div class="label">制約の達成状況</div><div class="value">未生成</div></div>
+          <div class="summary-card status"><div class="label">ねこみみ達成状況</div><div class="value">未生成</div></div>
         </div>
       </section>
 
@@ -196,7 +198,7 @@
         <ul>
           <li>1〜2日目は4時間品を中心に「やる気」を育成し、あわせて生産を強く優先します。</li>
           <li>ねこみみさんのおねがいを有効にしている場合、必須条件として生成します。</li>
-          <li>作りたい制作物を優先しつつ、青船貨と素材負担のバランスが良いスケジュールを探索します。</li>
+          <li>「作りたい制作物」の設定を優先しつつ、青船貨と素材負担のバランスが良いスケジュールを探索します。</li>
           <li>標準検索では素材の使用目安と過去8週の使用履歴を考慮し、素材の偏りを抑えます。</li>
         </ul>
       </div>
