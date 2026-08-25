@@ -14,6 +14,11 @@ function loadHistory(){
 function saveHistory(h){
   localStorage.setItem(HISTORY_KEY,JSON.stringify(h.slice(-8)));
 }
+function loadHistoryRedo(){
+  try{const h=JSON.parse(localStorage.getItem(HISTORY_REDO_KEY)||"[]");return Array.isArray(h)?h:[]}
+  catch(e){return []}
+}
+function saveHistoryRedo(h){localStorage.setItem(HISTORY_REDO_KEY,JSON.stringify(h.slice(-8)))}
 function weightedHistoryMaterials(){
   const h=loadHistory();
   const out={};
@@ -39,6 +44,9 @@ function historyMaterialPenalty(item,workshops){
 }
 
 let excludedMaterials=new Set(), LAST=null, activeDay=0;
+let EDIT_UNDO=[], EDIT_REDO=[];
+let REPLACE_CTX=null, REPLACE_CATEGORY="", REPLACE_SHOW_ALL=false;
+const HISTORY_REDO_KEY="island_workshop_scheduler_history_redo_v1";
 
 // v0.41 generation context: values that are constant during one search.
 let ACTIVE_SEARCH_MODE=null;
@@ -986,6 +994,145 @@ function chooseSchedule(){
     materialPenalty:practicalBurden(best.materials||{},best.days||[])
   };
 }
+
+function snapshotSchedule(){
+  return LAST ? LAST.days.map(day=>day.map(s=>s.item.id)) : null;
+}
+function restoreSchedule(snapshot){
+  if(!LAST || !snapshot) return;
+  LAST.days=snapshot.map(day=>day.map(id=>({item:ITEMS.find(i=>i.id===id)})));
+  recalculateManualSchedule();
+}
+function updateEditButtons(){
+  const u=$("#undoEdit"),r=$("#redoEdit");
+  if(u)u.disabled=!EDIT_UNDO.length;
+  if(r)r.disabled=!EDIT_REDO.length;
+}
+function currentFavorStart(){
+  const out={};
+  if(!favorEnabled()) return out;
+  for(const [t,n] of [[4,8],[6,6],[8,8]]){
+    const id=+$("#favor"+t).value;
+    if(id)out[id]=n;
+  }
+  return out;
+}
+function recalculateManualSchedule(){
+  if(!LAST)return;
+  const workshops=LAST.workshops,cap=LAST.grooveCap;
+  let groove=0,value=0,effTransitions=0;
+  let materials={},produced={},favor=currentFavorStart();
+  const rebuilt=[];
+
+  for(const day of LAST.days){
+    let prev=null,time=0;
+    const slots=[];
+    for(const old of day){
+      const item=old.item||ITEMS.find(i=>i.id===old);
+      const isEff=efficient(prev,item);
+      const grooveBefore=groove;
+      const grooveAfter=isEff?Math.min(cap,groove+workshops):groove;
+      const qty=workshops*(isEff?2:1);
+      const slotValue=Math.round(item.value*qty*(1+grooveAfter/100));
+      applyProductionToFavor(favor,item.id,qty);
+      produced[item.id]=(produced[item.id]||0)+qty;
+      materials=addMaterials(materials,item,workshops);
+      slots.push({item,start:time,end:time+item.time,eff:isEff,qty,grooveBefore,grooveAfter,valueWithGroove:slotValue});
+      time+=item.time; value+=slotValue; if(isEff)effTransitions++;
+      groove=grooveAfter; prev=item;
+    }
+    rebuilt.push(slots);
+  }
+  LAST.days=rebuilt;
+  LAST.estimatedValue=value;
+  LAST.effTransitions=effTransitions;
+  LAST.groove=groove;
+  LAST.materials=materials;
+  LAST.usedCount=new Map(Object.entries(produced).map(([id,q])=>[+id,q]));
+  LAST.favorNeeds=new Map((LAST.targets||[]).map(id=>[id,favor[id]||0]));
+  LAST.totalSlots=rebuilt.reduce((s,d)=>s+d.length*workshops,0);
+  LAST.materialPenalty=practicalBurden(materials,rebuilt);
+  renderSummary();renderDay(activeDay);renderMaterials();updateEditButtons();
+}
+function replacementFit(prev,item,next){
+  const before=!!prev&&efficient(prev,item);
+  const after=!!next&&efficient(item,next);
+  return {before,after,score:(before?1:0)+(after?1:0)};
+}
+function closeReplacePopover(){
+  const p=$("#replacePopover"); if(p)p.hidden=true;
+  REPLACE_CTX=null;
+}
+function positionReplacePopover(row){
+  const p=$("#replacePopover"),r=row.getBoundingClientRect();
+  p.hidden=false;
+  const w=Math.min(430,window.innerWidth-24);
+  let left=Math.min(window.innerWidth-w-12,Math.max(12,r.left+60));
+  let top=r.bottom+8;
+  if(top+Math.min(560,window.innerHeight-24)>window.innerHeight) top=Math.max(12,r.top-430);
+  p.style.left=left+"px";p.style.top=top+"px";
+}
+function openReplacement(dayIndex,slotIndex,row){
+  if(!LAST)return;
+  const slots=LAST.days[dayIndex],slot=slots[slotIndex];
+  REPLACE_CTX={dayIndex,slotIndex,current:slot.item};
+  REPLACE_CATEGORY="";REPLACE_SHOW_ALL=false;
+  $("#replaceTitle").textContent=`${slot.item.name}（${slot.item.time}H）`;
+  $("#replaceSearch").value="";
+  renderReplacementCategories();
+  renderReplacementCandidates();
+  positionReplacePopover(row);
+  setTimeout(()=>$("#replaceSearch").focus(),0);
+}
+function renderReplacementCategories(){
+  if(!REPLACE_CTX)return;
+  const cats=[...new Set(available().filter(i=>i.time===REPLACE_CTX.current.time).flatMap(i=>i.cats))].sort(collator.compare);
+  $("#replaceCats").innerHTML=[`<button class="replace-cat-chip ${REPLACE_CATEGORY===""?"active":""}" data-cat="">すべて</button>`,
+    ...cats.map(c=>`<button class="replace-cat-chip ${REPLACE_CATEGORY===c?"active":""}" data-cat="${c}">${c}</button>`)].join("");
+  $("#replaceCats").querySelectorAll("button").forEach(b=>b.onclick=()=>{
+    REPLACE_CATEGORY=b.dataset.cat;REPLACE_SHOW_ALL=false;renderReplacementCategories();renderReplacementCandidates();
+  });
+}
+function replacementCandidates(){
+  if(!REPLACE_CTX)return [];
+  const {dayIndex,slotIndex,current}=REPLACE_CTX;
+  const day=LAST.days[dayIndex],prev=slotIndex?day[slotIndex-1].item:null,next=slotIndex<day.length-1?day[slotIndex+1].item:null;
+  const q=$("#replaceSearch").value.trim();
+  return available()
+    .filter(i=>i.id!==current.id && i.time===current.time)
+    .filter(i=>!q||i.name.includes(q))
+    .filter(i=>!REPLACE_CATEGORY||i.cats.includes(REPLACE_CATEGORY))
+    .map(item=>({item,fit:replacementFit(prev,item,next)}))
+    .sort((a,b)=>b.fit.score-a.fit.score || b.item.value-a.item.value || collator.compare(a.item.name,b.item.name));
+}
+function renderReplacementCandidates(){
+  if(!REPLACE_CTX)return;
+  const all=replacementCandidates(),shown=REPLACE_SHOW_ALL?all:all.slice(0,6);
+  $("#replaceCandidates").innerHTML=shown.length?shown.map(({item,fit})=>{
+    const cls=fit.score===2?"both":fit.score===1?"one":"none";
+    const mark=fit.score===2?"◎":fit.score===1?"○":"－";
+    const text=fit.score===2?"前後とも維持":fit.before?"前を維持":fit.after?"後ろを維持":"ボーナスなし";
+    return `<button class="replace-candidate" data-id="${item.id}">
+      <span class="replace-fit ${cls}" title="${text}">${mark}</span>
+      <span><div class="replace-candidate-name">${item.name}</div><div class="replace-candidate-meta">${item.cats.join(" / ")} ・ ${text}</div></span>
+      <span class="replace-candidate-time">${item.time}H</span>
+    </button>`;
+  }).join(""):`<div class="replace-empty">条件に合う候補がありません。</div>`;
+  $("#replaceCandidates").querySelectorAll("button").forEach(b=>b.onclick=()=>replaceCurrentItem(+b.dataset.id));
+  const more=$("#replaceShowAll");
+  if(!REPLACE_SHOW_ALL && all.length>6){more.hidden=false;more.textContent=`すべて表示（${all.length}）`;}
+  else{more.hidden=true;}
+}
+function replaceCurrentItem(itemId){
+  if(!REPLACE_CTX||!LAST)return;
+  const item=ITEMS.find(i=>i.id===itemId); if(!item)return;
+  EDIT_UNDO.push(snapshotSchedule()); if(EDIT_UNDO.length>30)EDIT_UNDO.shift();
+  EDIT_REDO=[];
+  LAST.days[REPLACE_CTX.dayIndex][REPLACE_CTX.slotIndex]={...LAST.days[REPLACE_CTX.dayIndex][REPLACE_CTX.slotIndex],item};
+  closeReplacePopover();
+  recalculateManualSchedule();
+}
+
 function formatCats(cats){
   return cats.map(c=>`<span class="tag">${c}</span>`).join("")
 }
@@ -996,7 +1143,7 @@ function renderDay(idx){
   $("#dayTitle").textContent=`${idx+1}日目の工房スケジュール（全工房共通）`;
   $("#scheduleBody").innerHTML=slots.map((s,i)=>{
     const isTarget=LAST.targets.includes(s.item.id);
-    return `<tr class="${s.eff?'efficient-row':''}">
+    return `<tr class="${s.eff?'efficient-row':''} replaceable-row" data-slot="${i}" title="クリックして置き換え候補を表示">
       <td class="col-no"><div class="no-circle">${i+1}</div></td>
       <td class="col-name"><span class="item-name">${s.item.name}</span>${isTarget?'<span class="target-mini">お願い</span>':""}</td>
       <td class="col-time">${s.item.time}時間</td>
@@ -1011,6 +1158,7 @@ function renderDay(idx){
         : `${s.grooveAfter}`}</td>
     </tr>`
   }).join("");
+  $("#scheduleBody").querySelectorAll("tr.replaceable-row").forEach(row=>row.onclick=()=>openReplacement(idx,+row.dataset.slot,row));
   $("#tabs").querySelectorAll("button").forEach((b,i)=>b.classList.toggle("active",i===idx))
 }
 function renderSummary(){
@@ -1077,7 +1225,7 @@ function renderMaterials(){
   }).join("");
 }
 function render(){
-  try{LAST=chooseSchedule()}
+  try{LAST=chooseSchedule();EDIT_UNDO=[];EDIT_REDO=[];updateEditButtons();closeReplacePopover()}
   catch(e){
     $("#scheduleBody").innerHTML=`<tr><td colspan="7" style="text-align:center;color:#b94d4d;padding:30px">${e.message}</td></tr>`;
     return
@@ -1136,6 +1284,7 @@ $("#confirmWeek").onclick=()=>{
     signature
   });
   saveHistory(h);
+  saveHistoryRedo([]);
   $("#historyStatus").textContent=`今週分を保存しました（履歴 ${loadHistory().length}週）`;
 };
 
@@ -1145,10 +1294,40 @@ $("#undoWeek").onclick=()=>{
     $("#historyStatus").textContent="取り消せる履歴はありません。";
     return;
   }
-  h.pop();
+  const removed=h.pop();
   saveHistory(h);
+  const redo=loadHistoryRedo();redo.push(removed);saveHistoryRedo(redo);
   $("#historyStatus").textContent=`直前の確定を取り消しました（履歴 ${h.length}週）`;
 };
+$("#redoWeek").onclick=()=>{
+  const redo=loadHistoryRedo();
+  if(!redo.length){$("#historyStatus").textContent="戻せる取り消しはありません。";return;}
+  const restored=redo.pop(),h=loadHistory();h.push(restored);
+  saveHistory(h);saveHistoryRedo(redo);
+  $("#historyStatus").textContent=`取り消した確定を戻しました（履歴 ${h.length}週）`;
+};
+
+
+$("#undoEdit").onclick=()=>{
+  if(!EDIT_UNDO.length||!LAST)return;
+  EDIT_REDO.push(snapshotSchedule());
+  restoreSchedule(EDIT_UNDO.pop());
+  closeReplacePopover();
+};
+$("#redoEdit").onclick=()=>{
+  if(!EDIT_REDO.length||!LAST)return;
+  EDIT_UNDO.push(snapshotSchedule());
+  restoreSchedule(EDIT_REDO.pop());
+  closeReplacePopover();
+};
+$("#replaceClose").onclick=closeReplacePopover;
+$("#replaceSearch").oninput=()=>{REPLACE_SHOW_ALL=false;renderReplacementCandidates()};
+$("#replaceShowAll").onclick=()=>{REPLACE_SHOW_ALL=true;renderReplacementCandidates()};
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeReplacePopover()});
+document.addEventListener("click",e=>{
+  const p=$("#replacePopover");
+  if(!p.hidden && !p.contains(e.target) && !e.target.closest?.("tr.replaceable-row")) closeReplacePopover();
+});
 
 $("#generate").onclick=()=>{
   const btn=$("#generate");
@@ -1188,6 +1367,6 @@ $("#reset").onclick=()=>{
   $("#tabs").style.display="none";
   $("#materialPanel").style.display="none";
   $("#generateStatus").textContent="";
-  LAST=null
+  LAST=null;EDIT_UNDO=[];EDIT_REDO=[];updateEditButtons();closeReplacePopover()
 };
 load();

@@ -11,7 +11,7 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v1.1.6</span>
+      <span class="ver">v1.2.0</span>
     </div>
     <div class="header-actions">
       <button id="generate" class="primary header-generate">⚙ スケジュールを生成</button>
@@ -130,6 +130,10 @@
       <section class="panel schedule-panel">
         <div class="schedule-head">
           <strong id="dayTitle">1日目の工房スケジュール（全工房共通）</strong>
+          <div class="edit-history-actions">
+            <button id="undoEdit" class="icon-history-btn" title="置き換えを取り消す" disabled>↶</button>
+            <button id="redoEdit" class="icon-history-btn" title="取り消した置き換えをやり直す" disabled>↷</button>
+          </div>
         </div>
         <div style="overflow:auto">
           <table class="schedule-table">
@@ -156,6 +160,7 @@
       <div id="weekConfirmBar" style="display:none;margin:10px 0 12px;align-items:center;gap:8px;flex-wrap:wrap">
         <button id="confirmWeek" class="olive" style="width:auto">✓ 今週分を確定</button>
         <button id="undoWeek" class="secondary" style="width:auto">直前の確定を取り消す</button>
+        <button id="redoWeek" class="secondary" style="width:auto">取り消しを戻す</button>
         <span id="historyStatus" class="small"></span>
       </div>
       <section id="materialPanel" class="panel material-panel" style="display:none">
@@ -181,6 +186,24 @@
       </div>
     </main>
   </div>
+</div>
+
+
+<div id="replacePopover" class="replace-popover" hidden>
+  <div class="replace-popover-head">
+    <div>
+      <div class="replace-kicker">島産品を置き換え</div>
+      <strong id="replaceTitle"></strong>
+    </div>
+    <button id="replaceClose" class="replace-close" aria-label="閉じる">×</button>
+  </div>
+  <div class="replace-search-wrap">
+    <span>⌕</span><input id="replaceSearch" type="text" placeholder="島産品名を検索">
+  </div>
+  <div id="replaceCats" class="replace-cats"></div>
+  <div class="replace-note">24時間を維持するため、同じ製作時間の島産品から検索します。</div>
+  <div id="replaceCandidates" class="replace-candidates"></div>
+  <button id="replaceShowAll" class="replace-show-all" hidden></button>
 </div>
 
 <script src="js/data.js"></script>
