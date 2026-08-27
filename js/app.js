@@ -1174,8 +1174,14 @@ function renderReplacementCandidates(){
     const text=fit.rank===3?"前後一致":fit.rank===2?"手前一致":fit.rank===1?"後ろ一致":"一致なし";
     return `<button class="replace-candidate" data-id="${item.id}">
       <span class="replace-fit ${cls}" title="${text}">${mark}</span>
-      <span><div class="replace-candidate-name">${item.name}</div><div class="replace-candidate-meta">${item.cats.join(" / ")}</div></span>
-      <span class="replace-candidate-time">${item.time}H</span>
+      <span>
+        <div class="replace-candidate-name">${item.name}</div>
+        <div class="replace-candidate-meta">${item.cats.join(" / ")}</div>
+      </span>
+      <span class="replace-candidate-side">
+        <span class="replace-base-value">基本価値 ${item.value.toLocaleString()}</span>
+        <span class="replace-candidate-time">${item.time}H</span>
+      </span>
     </button>`;
   }).join(""):`<div class="replace-empty">条件に合う候補がありません。</div>`;
   $("#replaceCandidates").querySelectorAll("button").forEach(b=>b.onclick=()=>replaceCurrentItem(+b.dataset.id));
