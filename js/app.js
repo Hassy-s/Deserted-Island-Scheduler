@@ -1269,8 +1269,8 @@ function renderSummary(){
     </div>
     <div class="summary-card coin-card">
       <div class="label">概算青船貨獲得数</div>
-      <div class="value">${Math.round(LAST.estimatedValue*1.5).toLocaleString()}</div>
-      <div class="sub">青船貨（目安）・需要/人気度 1.5倍想定</div>
+      <div class="value">${Math.round(LAST.estimatedValue*1.3).toLocaleString()}</div>
+      <div class="sub">青船貨（目安）・需要/人気度 1.3倍想定</div>
     </div>
     <div class="summary-card">
       <div class="label">あわせて生産回数</div>
