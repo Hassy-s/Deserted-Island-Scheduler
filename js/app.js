@@ -68,6 +68,23 @@ for(const a of ITEMS){
 const efficient=(a,b)=>!!(a&&b&&EFFICIENT_IDS.get(a.id)?.has(b.id));
 
 function autoWorkshops(rank){return rank>=15?4:rank>=5?3:2}
+function workshopGrade(rank){
+  if(rank>=19)return 5;
+  if(rank>=14)return 4;
+  if(rank>=8)return 3;
+  if(rank>=6)return 2;
+  return 1;
+}
+function workshopMultiplier(rank){return 1+(workshopGrade(rank)-1)*0.1}
+function currentItemValue(item,rank=+$("#rank").value){
+  return Math.floor(item.value*workshopMultiplier(rank));
+}
+function slotExportValue(item,qty,grooveAfter,rank=+$("#rank").value){
+  // Game formula applies Workshop bonus first, then Groove, with flooring.
+  const workshopValue=currentItemValue(item,rank);
+  const perUnit=Math.floor(workshopValue*(1+grooveAfter/100));
+  return perUnit*qty;
+}
 function itemUsesExcludedMaterial(item){
   return (item.materials||[]).some(m=>excludedMaterials.has(m.name));
 }
@@ -418,7 +435,7 @@ function earlyGrooveBonus(dayIndex, isEff, grooveBefore, grooveAfter, grooveCapV
 }
 
 function candidateBaseScore(item, prev, grooveAfter, favorRemaining, currentMaterials, workshops, dayIndex=0, grooveBefore=0, grooveCapValue=0){
-  let score = (item.value / item.time) * 12;
+  let score = (currentItemValue(item) / item.time) * 12;
   const eff = efficient(prev,item);
   if(eff) score += 1400;
   score *= (1 + grooveAfter/100);
@@ -689,7 +706,7 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
         const grooveBefore=st.groove;
         const grooveAfter=isEff?Math.min(cap,st.groove+workshops):st.groove;
         const qty=workshops*(isEff?2:1);
-        const value=Math.round(item.value*qty*(1+grooveAfter/100));
+        const value=slotExportValue(item,qty,grooveAfter);
         const favor=cloneFavor(st.favor);
         const favorBefore=st.favor?.[item.id]||0;
         applyProductionToFavor(favor,item.id,qty);
@@ -1107,7 +1124,7 @@ function recalculateManualSchedule(){
       const grooveBefore=groove;
       const grooveAfter=isEff?Math.min(cap,groove+workshops):groove;
       const qty=workshops*(isEff?2:1);
-      const slotValue=Math.round(item.value*qty*(1+grooveAfter/100));
+      const slotValue=slotExportValue(item,qty,grooveAfter);
       applyProductionToFavor(favor,item.id,qty);
       produced[item.id]=(produced[item.id]||0)+qty;
       materials=addMaterials(materials,item,workshops);
@@ -1163,7 +1180,7 @@ function replacementCandidates(){
   return available()
     .filter(i=>i.id!==current.id && i.time===current.time)
     .map(item=>({item,fit:replacementFit(prev,item,next)}))
-    .sort((a,b)=>b.fit.rank-a.fit.rank || b.item.value-a.item.value || collator.compare(a.item.name,b.item.name));
+    .sort((a,b)=>b.fit.rank-a.fit.rank || currentItemValue(b.item)-currentItemValue(a.item) || collator.compare(a.item.name,b.item.name));
 }
 function renderReplacementCandidates(){
   if(!REPLACE_CTX)return;
@@ -1179,7 +1196,7 @@ function renderReplacementCandidates(){
         <div class="replace-candidate-meta">${item.cats.join(" / ")}</div>
       </span>
       <span class="replace-candidate-side">
-        <span class="replace-base-value">基本価値 ${item.value.toLocaleString()}</span>
+        <span class="replace-base-value">基本取引額 ${currentItemValue(item).toLocaleString()}</span>
         <span class="replace-candidate-time">${item.time}H</span>
       </span>
     </button>`;
