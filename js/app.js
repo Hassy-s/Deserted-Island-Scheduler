@@ -125,7 +125,7 @@ function save(){
     excludedMaterials:[...excludedMaterials],
     wantedItems:[...wantedItems],
     favor:favorEnabled(),
-    searchMode:searchMode(),
+    valueRetention:valueRetention(),
     capGather:+$("#capGather").value,
     capCrop:+$("#capCrop").value,
     capAnimal:+$("#capAnimal").value,
@@ -154,7 +154,10 @@ function load(){
     $("#favor4").value="";
     $("#favor6").value="";
     $("#favor8").value="";
-    $("#searchModeSelect").value = s.searchMode==="max" ? "max" : "standard";
+    $("#valueRetention").value =
+      (s.valueRetention!==undefined && +s.valueRetention>=0.95 && +s.valueRetention<=1)
+        ? String(+s.valueRetention)
+        : "0.96";
     if(s.capGather!==undefined)$("#capGather").value=s.capGather;
     if(s.capCrop!==undefined)$("#capCrop").value=s.capCrop;
     if(s.capAnimal!==undefined)$("#capAnimal").value=s.capAnimal;
@@ -287,15 +290,20 @@ function addMaterials(total,item,workshops){
   return out;
 }
 
-function rawSearchMode(){ return $("#searchModeSelect").value==="max" ? "max" : "standard"; }
-function searchMode(){ return ACTIVE_SEARCH_MODE || rawSearchMode(); }
+function rawSearchMode(){ return "standard"; }
+function searchMode(){ return "standard"; }
+function valueRetention(){
+  const el=$("#valueRetention");
+  const v=el?+el.value:0.96;
+  return Number.isFinite(v) && v>=0.95 && v<=1 ? v : 0.96;
+}
 
 function materialType(name){
   return MATERIAL_PROGRESS[name]?.category || "gather";
 }
 
 function comfortLimit(name){
-  // Search Settings now define the actual material comfort threshold.
+  // Search Settings define the material comfort threshold; +5 is the free weekly margin.
   return standardSoftCap(name);
 }
 
@@ -937,7 +945,7 @@ function chooseSchedule(){
     if(searchMode()==="standard"){
       // Keep at least 95% of the best value for THIS day.
       // Within that high-value band, material dispersion wins.
-      const floor=maxDayValue*0.95;
+      const floor=maxDayValue*valueRetention();
       const highValue=feasible.filter(dc=>dc.value>=floor);
       if(highValue.length) pool=highValue;
 
@@ -1023,7 +1031,8 @@ function chooseSchedule(){
     grooveCap:cap,
     materials:state.materials||{},
     materialPenalty:practicalBurden(state.materials||{},state.days||[]),
-    engineVersion:"C-day-v1"
+    engineVersion:"C-day-v2",
+    valueRetention:valueRetention()
   };
 }
 
@@ -1245,7 +1254,7 @@ function renderMaterials(){
   $("#materialGrid").innerHTML=rows.map(([name,qty])=>{
     const t=materialType(name);
     const limit=comfortLimit(name);
-    const cls=qty>limit+12?"very-heavy":qty>limit?"heavy":"";
+    const cls=qty>limit+10?"very-heavy":qty>limit+5?"heavy":"";
     let hint=t==="granary"?"グラナリー":t==="animal"?"飼育":t==="crop"?"作物":"採集";
     return `<div class="material-card ${cls}">
       <span class="mname">${t==="granary"?"⚠ ":""}${name} <span class="pill">${hint}</span></span>
@@ -1293,7 +1302,7 @@ $("#favorOff").addEventListener("change",()=>{
   $("#favors").classList.remove("on");save()
 });
 ["#favor4","#favor6","#favor8"].forEach(s=>$(s).addEventListener("change",save));
-$("#searchModeSelect").addEventListener("change",save);
+$("#valueRetention").addEventListener("change",save);
 ["#capGather","#capCrop","#capAnimal","#capGranary"].forEach(sel=>$(sel).addEventListener("change",save));
 $("#filter").oninput=renderExclude;
 $("#wantedFilter").oninput=renderWanted;
@@ -1387,7 +1396,7 @@ $("#saveBtn").onclick=()=>{save();alert("設定を保存しました。")};
 $("#reset").onclick=()=>{
   localStorage.removeItem(STORAGE_KEY);excludedMaterials.clear();wantedItems.clear();
   $("#rank").value=5;$("#workshops").value=3;$("#landmarks").value=2;
-  $("#favorOff").checked=true;$("#favorOn").checked=false;$("#favors").classList.remove("on");$("#searchModeSelect").value="standard";$("#capGather").value=25;$("#capCrop").value=20;$("#capAnimal").value=16;$("#capGranary").value=12;
+  $("#favorOff").checked=true;$("#favorOn").checked=false;$("#favors").classList.remove("on");$("#valueRetention").value="0.96";$("#capGather").value=25;$("#capCrop").value=20;$("#capAnimal").value=16;$("#capGranary").value=12;
   fillFavorSelects();renderExclude();updateExcludeSummary();
   $("#summary").innerHTML=`
     <div class="summary-card"><div class="label">工房の数</div><div class="value">-</div></div>
