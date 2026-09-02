@@ -357,19 +357,24 @@ function materialCostForQty(name,qty){
   const w=materialWeight(name);
   const limit=comfortLimit(name);
 
-  // Up to the comfort amount, cost is intentionally gentle.
-  const baseQty=Math.min(qty,limit);
-  let cost=baseQty*w*1.4;
+  // v1.4.1 C-engine test:
+  // The user's configured amount is a real target, but +5 is treated as
+  // harmless weekly variation. Only usage above that tolerance is penalized.
+  const freeLine=limit+5;
+  const normalLine=limit+10;
 
-  // Once the material passes the comfort line, every extra piece
-  // becomes progressively more expensive.
-  const over=Math.max(0,qty-limit);
-  cost += over*over*w*22.0;
+  let cost=0;
 
-  // If it keeps climbing well past the comfort line, strongly encourage
-  // the search to switch to other materials.
-  const severe=Math.max(0,qty-(limit+8));
-  cost += severe*severe*w*42.0;
+  // +6 .. +10: normal penalty. This should encourage another route without
+  // destroying a clearly better-value schedule.
+  const normalOver=Math.max(0,Math.min(qty,normalLine)-freeLine);
+  cost += normalOver*normalOver*w*18.0;
+
+  // +11 and beyond: strong penalty. If the user is comfortable with this
+  // amount they can raise the configured target instead.
+  const strongOver=Math.max(0,qty-normalLine);
+  cost += strongOver*strongOver*w*90.0;
+  cost += strongOver*5*w*18.0; // keep the transition continuous/meaningful
 
   return cost;
 }
@@ -599,13 +604,10 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
         );
         if(earlyAllowedFits.length) fits=earlyAllowedFits;
       }
-
-      // v0.38 groove-growth rule:
-      // During days 1-2, use 4h crafts only while current groove is below
-      // the CURRENT progression cap (25 / 35 / 45 etc.).
-      // The instant the cap is reached, release the restriction even if
-      // there are hours left in the same day.
-      if(dayIndex<=1 && st.groove<cap){
+      // v1.4.1 C-engine:
+      // While the DAY-START groove is below 40, only the first slot is forced
+      // to 4H. After that first craft, 4H / 6H / 8H are all free candidates.
+      if(startGroove<40 && st.time===0){
         const fourHourFits=fits.filter(i=>i.time===4);
         if(fourHourFits.length) fits=fourHourFits;
       }
@@ -632,16 +634,7 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
             practicalPool=underCap;
           }
         }
-
-        const efficientPool=practicalPool.filter(item=>efficient(st.prev,item));
-        if(efficientPool.length){
-          // v1.1.5: when an efficient continuation exists, stay on efficient
-          // production. This prevents an unfinished Favor from being inserted
-          // non-efficiently (4 items) when it can instead be completed as 8.
-          fits=efficientPool;
-        }else{
-          fits=practicalPool;
-        }
+        fits=practicalPool;
       }
 
       if(!fits.length){
@@ -696,9 +689,9 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
       if(dayIndex>=2 && favorEnabled()){
         const requiredRanked=ranked.filter(x=>(st.favor?.[x.item.id]||0)>0);
         const normalRanked=ranked.filter(x=>(st.favor?.[x.item.id]||0)<=0);
-        ranked=[...requiredRanked,...normalRanked.slice(0,6)];
+        ranked=[...requiredRanked,...normalRanked.slice(0,8)];
       }else{
-        ranked=ranked.slice(0,6);
+        ranked=ranked.slice(0,8);
       }
 
       for(const {item} of ranked){
@@ -903,186 +896,134 @@ function chooseSchedule(){
     }
   }
 
-  // Weekly beam: each branch chooses one complete 24h day schedule.
-  let weekBeam=[{
-    day:0, groove:0, favor:cloneFavor(favorStart), value:0,
-    effTransitions:0, days:[], produced:{}, materials:{}, burden:0, daySignatures:[], grooveHistory:[]
-  }];
-
-  const WEEK_BEAM=28;
+  // v1.4.1 C-engine:
+  // Optimize one complete 24h day at a time.  The end groove, remaining Favor
+  // and accumulated materials are handed directly to the next day.
+  let state={
+    groove:0,
+    favor:cloneFavor(favorStart),
+    value:0,
+    effTransitions:0,
+    days:[],
+    produced:{},
+    materials:{},
+    grooveHistory:[]
+  };
 
   for(let day=0;day<5;day++){
-    let next=[];
-    for(const wk of weekBeam){
-      const dayCandidates=daySearch(avail,workshops,cap,wk.groove,wk.favor,wk.materials,28,day);
+    const dayCandidates=daySearch(
+      avail,workshops,cap,state.groove,state.favor,state.materials,
+      110,day
+    );
 
-      for(const dc of dayCandidates.slice(0,8)){
-        const produced={...wk.produced};
-        for(const sl of dc.slots){
-          produced[sl.item.id]=(produced[sl.item.id]||0)+sl.qty;
-        }
-        const materials={...wk.materials};
-        for(const [name,qty] of Object.entries(dc.dayMaterials||{})){
-          materials[name]=(materials[name]||0)+qty;
-        }
-        const sig=daySignature(dc.slots);
-        const prevSig=wk.daySignatures.length ? wk.daySignatures[wk.daySignatures.length-1] : null;
-
-        // In standard mode, do not repeat the exact same day back-to-back.
-        // Highest-efficiency mode is allowed to repeat if it is mathematically best.
-        if(searchMode()==="standard" && prevSig && sig===prevSig){
-          continue;
-        }
-
-        const weeklyBurden=practicalBurden(materials,[...wk.days,dc.slots]);
-
-        next.push({
-          day:day+1,
-          groove:dc.groove,
-          favor:cloneFavor(dc.favor),
-          value:wk.value+dc.value,
-          effTransitions:wk.effTransitions+dc.effTransitions,
-          days:[...wk.days,dc.slots],
-          produced,
-          materials,
-          burden:weeklyBurden,
-          daySignatures:[...wk.daySignatures,sig],
-          grooveHistory:[...wk.grooveHistory,dc.groove]
-        });
-      }
+    if(!dayCandidates.length){
+      throw new Error(`${day+1}日目の24時間スケジュールを生成できません。`);
     }
 
-    next.sort((a,b)=>{
-      const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
-      // Before final day, remaining favors are a strong penalty but not absolute,
-      // so optimizer can build groove first when useful.
-      const remainingDays=5-(day+1);
-      const favorWeekWeight =
-        day<=1 ? 0 :
-        remainingDays===0 ? 1000000 :
-        remainingDays===1 ? 18000 :
-        9000;
-      const aFeasiblePenalty=pa * favorWeekWeight;
-      const bFeasiblePenalty=pb * favorWeekWeight;
-      const burdenA=a.burden ?? practicalBurden(a.materials,a.days);
-      const burdenB=b.burden ?? practicalBurden(b.materials,b.days);
+    const remainingDays=4-day;
 
-      if(searchMode()==="standard"){
-        // Standard mode: material burden dominates.
-        // Value/groove only break ties between similarly easy schedules.
-        const sa = -(burdenA*4.5) + a.value*0.24 + a.groove*70 + a.effTransitions*12 + wantedWeekBonus(a.days) - aFeasiblePenalty;
-        const sb = -(burdenB*4.5) + b.value*0.24 + b.groove*70 + b.effTransitions*12 + wantedWeekBonus(b.days) - bFeasiblePenalty;
-        return sb-sa;
-      }else{
-        const sa=a.value + a.groove*95 + a.effTransitions*30 + wantedWeekBonus(a.days) - aFeasiblePenalty;
-        const sb=b.value + b.groove*95 + b.effTransitions*30 + wantedWeekBonus(b.days) - bFeasiblePenalty;
-        return sb-sa;
-      }
+    // Never choose a day that makes the mandatory Favor impossible to finish
+    // in the remaining days, using a conservative no-efficiency estimate.
+    let feasible=dayCandidates.filter(dc=>{
+      if(!favorEnabled()) return true;
+      if(remainingDays===0) return favorPenalty(dc.favor)===0;
+      return favorHoursNeededConservative(dc.favor,workshops)<=remainingDays*24;
     });
+    if(!feasible.length) feasible=dayCandidates;
 
-    // v0.37:
-    // For the first 48h, preserve multiple trade-offs instead of collapsing
-    // them to one "best-looking" intermediate state.
-    if(day<=1){
-      weekBeam=preserveEarlyWeekDiversity(next,day,cap);
-    }else{
-      // After the 48h investment window, keep a broader but conventional beam.
-      const dedup=new Map();
-      for(const wk of next){
-        const matBucket=Math.round(materialStateBurdenForBeam(wk)/200);
-        const valueBucket=Math.round(wk.value/500);
-        const key=`${wk.groove}|${favorKey(wk.favor)}|${valueBucket}|${matBucket}`;
-        const old=dedup.get(key);
+    const maxDayValue=Math.max(...feasible.map(dc=>dc.value));
+    let pool=feasible;
 
-        if(!old){
-          dedup.set(key,wk);
-          continue;
+    if(searchMode()==="standard"){
+      // Keep at least 95% of the best value for THIS day.
+      // Within that high-value band, material dispersion wins.
+      const floor=maxDayValue*0.95;
+      const highValue=feasible.filter(dc=>dc.value>=floor);
+      if(highValue.length) pool=highValue;
+
+      pool=pool.slice().sort((a,b)=>{
+        // Mandatory Favor progress first when late in the week.
+        if(favorEnabled()){
+          const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
+          if(day>=2 && pa!==pb) return pa-pb;
         }
 
-        if(searchMode()==="standard"){
-          const oldScore=old.value-materialStateBurdenForBeam(old)*3.5+wantedWeekBonus(old.days);
-          const newScore=wk.value-materialStateBurdenForBeam(wk)*3.5+wantedWeekBonus(wk.days);
-          if(newScore>oldScore) dedup.set(key,wk);
-        }else{
-          if(wk.value>old.value) dedup.set(key,wk);
-        }
-      }
+        const burdenA=practicalBurden(a.materials,[...state.days,a.slots]);
+        const burdenB=practicalBurden(b.materials,[...state.days,b.slots]);
+        if(burdenA!==burdenB) return burdenA-burdenB;
 
-      weekBeam=[...dedup.values()].sort((a,b)=>{
-        const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
-        if(day===4 && pa!==pb) return pa-pb;
+        // User-selected "作りたい島産品" is a meaningful tie-breaker inside
+        // the already-high-value / material-safe zone.
+        const wa=wantedWeekBonus([...state.days,a.slots]);
+        const wb=wantedWeekBonus([...state.days,b.slots]);
+        if(wa!==wb) return wb-wa;
 
-        if(searchMode()==="standard"){
-          const sa=a.value-materialStateBurdenForBeam(a)*3.5+wantedWeekBonus(a.days);
-          const sb=b.value-materialStateBurdenForBeam(b)*3.5+wantedWeekBonus(b.days);
-          return sb-sa;
-        }
         return b.value-a.value;
-      }).slice(0,WEEK_BEAM);
+      });
+    }else{
+      pool=pool.slice().sort((a,b)=>{
+        if(favorEnabled()){
+          const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
+          if(day===4 && pa!==pb) return pa-pb;
+        }
+        const wa=wantedWeekBonus([...state.days,a.slots]);
+        const wb=wantedWeekBonus([...state.days,b.slots]);
+        return (b.value+wb)-(a.value+wa);
+      });
     }
+
+    const dc=pool[0];
+
+    const produced={...state.produced};
+    for(const sl of dc.slots){
+      produced[sl.item.id]=(produced[sl.item.id]||0)+sl.qty;
+    }
+
+    state={
+      groove:dc.groove,
+      favor:cloneFavor(dc.favor),
+      value:state.value+dc.value,
+      effTransitions:state.effTransitions+dc.effTransitions,
+      days:[...state.days,dc.slots],
+      produced,
+      materials:{...dc.materials},
+      grooveHistory:[...state.grooveHistory,dc.groove]
+    };
   }
 
-  if(!weekBeam.length) throw new Error("現在の条件では5日分のスケジュールを生成できません。");
-
-  // If favors are enabled, only accept fully satisfied schedules.
-  let candidates=weekBeam;
-  if(favorEnabled()){
-    const satisfied=weekBeam.filter(w=>favorPenalty(w.favor)===0);
-    if(!satisfied.length){
-      const best=weekBeam.slice().sort((a,b)=>favorPenalty(a.favor)-favorPenalty(b.favor))[0];
-      let details=[];
-      for(const id of targets){
-        const item=ITEMS.find(i=>i.id===id);
-        const need=item.time===6?6:8;
-        const got=Math.min(need,best.produced[id]||0);
-        if(got<need) details.push(`${item.name}: ${got}/${need}`);
-      }
-      throw new Error(`現在の条件では、ねこみみさんのおねがいを絶対達成できる案が見つかりません。${details.length?"（"+details.join(" / ")+"）":""}`);
+  if(favorEnabled() && favorPenalty(state.favor)!==0){
+    let details=[];
+    for(const id of targets){
+      const item=ITEMS.find(i=>i.id===id);
+      const need=item.time===6?6:8;
+      const got=Math.min(need,state.produced[id]||0);
+      if(got<need) details.push(`${item.name}: ${got}/${need}`);
     }
-    candidates=satisfied;
-  }
-
-  let best;
-  if(searchMode()==="max"){
-    best=candidates.slice().sort((a,b)=>(b.value+wantedWeekBonus(b.days))-(a.value+wantedWeekBonus(a.days)))[0];
-  }else{
-    best=candidates.slice().sort((a,b)=>{
-      const burdenA=a.burden ?? practicalBurden(a.materials,a.days);
-      const burdenB=b.burden ?? practicalBurden(b.materials,b.days);
-
-      // Final decision uses the actually calculated five-day value.
-      // No future-value estimate is used here.
-      const scoreA=a.value-burdenA*3.5+wantedWeekBonus(a.days);
-      const scoreB=b.value-burdenB*3.5+wantedWeekBonus(b.days);
-      return scoreB-scoreA;
-    })[0];
+    throw new Error(`現在の条件では、ねこみみさんのおねがいを絶対達成できる案が見つかりません。${details.length?"（"+details.join(" / ")+"）":""}`);
   }
 
   const favorNeeds=new Map();
-  for(const id of targets){
-    favorNeeds.set(id,best.favor[id]||0);
-  }
+  for(const id of targets) favorNeeds.set(id,state.favor[id]||0);
 
   const usedCount=new Map();
-  for(const [id,qty] of Object.entries(best.produced||{})){
-    usedCount.set(+id,qty);
-  }
+  for(const [id,qty] of Object.entries(state.produced||{})) usedCount.set(+id,qty);
 
-  const totalSlots=best.days.reduce((sum,day)=>sum+day.length*workshops,0);
+  const totalSlots=state.days.reduce((sum,day)=>sum+day.length*workshops,0);
 
   return{
-    days:best.days,
+    days:state.days,
     workshops,
     targets,
     favorNeeds,
     usedCount,
-    estimatedValue:best.value,
-    effTransitions:best.effTransitions,
+    estimatedValue:state.value,
+    effTransitions:state.effTransitions,
     totalSlots,
-    groove:best.groove,
+    groove:state.groove,
     grooveCap:cap,
-    materials:best.materials||{},
-    materialPenalty:practicalBurden(best.materials||{},best.days||[])
+    materials:state.materials||{},
+    materialPenalty:practicalBurden(state.materials||{},state.days||[]),
+    engineVersion:"C-day-v1"
   };
 }
 
