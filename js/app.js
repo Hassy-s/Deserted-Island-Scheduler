@@ -159,7 +159,7 @@ function load(){
     $("#searchModeSelect").value="standard";
     if(s.retention!==undefined && $("#retentionSelect")){
       const rv=String(s.retention);
-      $("#retentionSelect").value=[...$("#retentionSelect").options].some(o=>o.value===rv)?rv:"0.96";
+      $("#retentionSelect").value=[...$("#retentionSelect").options].some(o=>o.value===rv)?rv:"0.94";
     }
     const capPolicy=s.capPolicy==="strict"?"strict":"auto";
     const capRadio=document.querySelector(`input[name="capPolicy"][value="${capPolicy}"]`);
@@ -879,22 +879,22 @@ function preserveEarlyWeekDiversity(weeks, dayIndex, cap){
 
 
 // v1.4.0 ---------------------------------------------------------
-// Pamama-style daily ranking + exact weekly material-cap Beam search.
+// Solver-style daily ranking + exact weekly material-cap Beam search.
 // No material-price / penalty tuning is used for the generation decision.
-const PAMAMA_K_PER_LEN=80;
-const PAMAMA_REQ_K=20;
-const PAMAMA_WEEK_BEAM=650;
-const PAMAMA_PER_GROUP_KEEP=90;
-const PAMAMA_ITEM_INDEX=new Map(ITEMS.map((item,i)=>[item.id,i]));
-const PAMAMA_MATERIAL_NAMES=Object.keys(MATERIAL_UNLOCK).sort();
-let PAMAMA_CTX=null;
+const SOLVER_K_PER_LEN=80;
+const SOLVER_REQ_K=20;
+const SOLVER_WEEK_BEAM=650;
+const SOLVER_PER_GROUP_KEEP=90;
+const SOLVER_ITEM_INDEX=new Map(ITEMS.map((item,i)=>[item.id,i]));
+const SOLVER_MATERIAL_NAMES=Object.keys(MATERIAL_UNLOCK).sort();
+let SOLVER_CTX=null;
 
-function pamamaBitCount(mask){
+function solverBitCount(mask){
   let n=0n,c=0;
   while(mask){ n += mask&1n; mask >>= 1n; }
   return Number(n);
 }
-function pamamaHeapPush(heap,obj,limit,field="score"){
+function solverHeapPush(heap,obj,limit,field="score"){
   const val=obj[field];
   if(heap.length<limit){
     heap.push(obj);
@@ -917,8 +917,8 @@ function pamamaHeapPush(heap,obj,limit,field="score"){
     [heap[i],heap[s]]=[heap[s],heap[i]];i=s;
   }
 }
-function pamamaPrepare(avail,workshops,cap,targets,wantedIds){
-  const availableIdx=avail.map(x=>PAMAMA_ITEM_INDEX.get(x.id));
+function solverPrepare(avail,workshops,cap,targets,wantedIds){
+  const availableIdx=avail.map(x=>SOLVER_ITEM_INDEX.get(x.id));
   const allowed=new Uint8Array(ITEMS.length);
   for(const idx of availableIdx)allowed[idx]=1;
 
@@ -942,20 +942,20 @@ function pamamaPrepare(avail,workshops,cap,targets,wantedIds){
   });
   const favorIndexByItemId=new Map(favorIds.map((id,i)=>[id,i]));
   const requiredGlobalIdx=new Set();
-  for(const id of wantedList){const gi=PAMAMA_ITEM_INDEX.get(id);if(gi!==undefined)requiredGlobalIdx.add(gi)}
-  for(const id of favorIds){const gi=PAMAMA_ITEM_INDEX.get(id);if(gi!==undefined)requiredGlobalIdx.add(gi)}
+  for(const id of wantedList){const gi=SOLVER_ITEM_INDEX.get(id);if(gi!==undefined)requiredGlobalIdx.add(gi)}
+  for(const id of favorIds){const gi=SOLVER_ITEM_INDEX.get(id);if(gi!==undefined)requiredGlobalIdx.add(gi)}
 
-  PAMAMA_CTX={
+  SOLVER_CTX={
     avail,availableIdx,allowed,adj,workshops,cap,
     wantedList,wantedBitByItemId,wantedAllMask,
     favorIds,favorNeeds,favorIndexByItemId,requiredGlobalIdx,
     routes:null,dayCache:new Map(),routeMatCache:new Map(),maskCountCache:new Map(),
     history:ACTIVE_HISTORY_MATERIALS||{}
   };
-  pamamaEnumerateRoutes();
+  solverEnumerateRoutes();
 }
-function pamamaEnumerateRoutes(){
-  const C=PAMAMA_CTX;
+function solverEnumerateRoutes(){
+  const C=SOLVER_CTX;
   let capacity=650000,count=0;
   let slots=new Uint8Array(capacity*6),lens=new Uint8Array(capacity);
   const route=new Uint8Array(6),used=new Uint8Array(ITEMS.length);
@@ -986,10 +986,10 @@ function pamamaEnumerateRoutes(){
   dfs(0,-1,0);
   C.routes={slots,lens,count};
 }
-function pamamaRouteMaterials(routeId){
-  const C=PAMAMA_CTX;
+function solverRouteMaterials(routeId){
+  const C=SOLVER_CTX;
   if(C.routeMatCache.has(routeId))return C.routeMatCache.get(routeId);
-  const totals=new Uint16Array(PAMAMA_MATERIAL_NAMES.length),touched=[];
+  const totals=new Uint16Array(SOLVER_MATERIAL_NAMES.length),touched=[];
   const len=C.routes.lens[routeId],off=routeId*6;
   for(let p=0;p<len;p++){
     const item=ITEMS[C.routes.slots[off+p]];
@@ -1003,8 +1003,8 @@ function pamamaRouteMaterials(routeId){
   C.routeMatCache.set(routeId,sparse);
   return sparse;
 }
-function pamamaRouteRequirementInfo(routeId){
-  const C=PAMAMA_CTX;
+function solverRouteRequirementInfo(routeId){
+  const C=SOLVER_CTX;
   const len=C.routes.lens[routeId],off=routeId*6;
   let wantedMask=0n,coverScore=0;
   const favorAdds=new Uint8Array(C.favorIds.length);
@@ -1023,8 +1023,8 @@ function pamamaRouteRequirementInfo(routeId){
   }
   return {wantedMask,favorAdds,coverScore,requiredIndices};
 }
-function pamamaDailyCandidates(startGroove){
-  const C=PAMAMA_CTX;
+function solverDailyCandidates(startGroove){
+  const C=SOLVER_CTX;
   if(C.dayCache.has(startGroove))return C.dayCache.get(startGroove);
 
   const slotValue=Array.from({length:6},()=>new Int32Array(ITEMS.length));
@@ -1043,14 +1043,14 @@ function pamamaDailyCandidates(startGroove){
     const len=C.routes.lens[r],off=r*6;
     let value=0;
     for(let p=0;p<len;p++)value+=slotValue[p][C.routes.slots[off+p]];
-    pamamaHeapPush(general[len],{routeId:r,value,score:value},PAMAMA_K_PER_LEN);
+    solverHeapPush(general[len],{routeId:r,value,score:value},SOLVER_K_PER_LEN);
 
     if(C.requiredGlobalIdx.size){
-      const info=pamamaRouteRequirementInfo(r);
-      pamamaHeapPush(coverage[len],{routeId:r,value,score:value+info.coverScore},PAMAMA_K_PER_LEN);
+      const info=solverRouteRequirementInfo(r);
+      solverHeapPush(coverage[len],{routeId:r,value,score:value+info.coverScore},SOLVER_K_PER_LEN);
       for(const gi of info.requiredIndices){
         const hs=reqHeaps.get(gi);
-        if(hs)pamamaHeapPush(hs[len],{routeId:r,value,score:value},PAMAMA_REQ_K);
+        if(hs)solverHeapPush(hs[len],{routeId:r,value,score:value},SOLVER_REQ_K);
       }
     }
   }
@@ -1070,11 +1070,11 @@ function pamamaDailyCandidates(startGroove){
       if(p>0)groove=Math.min(C.cap,groove+C.workshops);
       value+=slotValue[p][C.routes.slots[off+p]];
     }
-    const info=pamamaRouteRequirementInfo(routeId);
+    const info=solverRouteRequirementInfo(routeId);
     let histPenalty=0;
-    const mats=pamamaRouteMaterials(routeId);
+    const mats=solverRouteMaterials(routeId);
     for(const [mi,q] of mats){
-      const name=PAMAMA_MATERIAL_NAMES[mi];
+      const name=SOLVER_MATERIAL_NAMES[mi];
       histPenalty+=(C.history[name]||0)*q*0.42;
     }
     out.push({routeId,len,value,startGroove,endGroove:groove,mats,histPenalty,...info});
@@ -1083,33 +1083,33 @@ function pamamaDailyCandidates(startGroove){
   C.dayCache.set(startGroove,out);
   return out;
 }
-function pamamaMaskCount(mask){
-  const C=PAMAMA_CTX,key=mask.toString();
+function solverMaskCount(mask){
+  const C=SOLVER_CTX,key=mask.toString();
   if(C.maskCountCache.has(key))return C.maskCountCache.get(key);
-  const n=pamamaBitCount(mask);C.maskCountCache.set(key,n);return n;
+  const n=solverBitCount(mask);C.maskCountCache.set(key,n);return n;
 }
-function pamamaRequirementsMet(st){
-  const C=PAMAMA_CTX;
+function solverRequirementsMet(st){
+  const C=SOLVER_CTX;
   if(st.wantedMask!==C.wantedAllMask)return false;
   for(let i=0;i<C.favorNeeds.length;i++)if((st.favorGot[i]||0)<C.favorNeeds[i])return false;
   return true;
 }
-function pamamaProgressScore(st){
-  const C=PAMAMA_CTX;
-  let score=pamamaMaskCount(st.wantedMask)*3200;
+function solverProgressScore(st){
+  const C=SOLVER_CTX;
+  let score=solverMaskCount(st.wantedMask)*3200;
   for(let i=0;i<C.favorNeeds.length;i++)score+=Math.min(st.favorGot[i]||0,C.favorNeeds[i])*700;
   return score;
 }
-function pamamaGroupKey(endGroove,favorGot,wantedMask){
+function solverGroupKey(endGroove,favorGot,wantedMask){
   return `${endGroove}|${Array.from(favorGot).join(",")}|${wantedMask.toString()}`;
 }
-function pamamaFitsLimits(mats,sparse,limits){
+function solverFitsLimits(mats,sparse,limits){
   if(!limits)return true;
   for(const [mi,q] of sparse)if(mats[mi]+q>limits[mi])return false;
   return true;
 }
-function pamamaMaterialize(light){
-  const C=PAMAMA_CTX;
+function solverMaterialize(light){
+  const C=SOLVER_CTX;
   const mats=new Uint16Array(light.parent.mats);
   for(const [mi,q] of light.cand.mats)mats[mi]+=q;
   return {
@@ -1119,61 +1119,61 @@ function pamamaMaterialize(light){
     histPenalty:light.histPenalty
   };
 }
-function pamamaWeeklySearch(limits){
-  const C=PAMAMA_CTX;
+function solverWeeklySearch(limits){
+  const C=SOLVER_CTX;
   let beam=[{
-    value:0,groove:0,mats:new Uint16Array(PAMAMA_MATERIAL_NAMES.length),days:[],
+    value:0,groove:0,mats:new Uint16Array(SOLVER_MATERIAL_NAMES.length),days:[],
     favorGot:new Uint8Array(C.favorIds.length),wantedMask:0n,histPenalty:0
   }];
 
   for(let day=0;day<5;day++){
     const groups=new Map();
     for(const state of beam){
-      const cands=pamamaDailyCandidates(state.groove);
+      const cands=solverDailyCandidates(state.groove);
       for(const cand of cands){
-        if(!pamamaFitsLimits(state.mats,cand.mats,limits))continue;
+        if(!solverFitsLimits(state.mats,cand.mats,limits))continue;
         const favorGot=new Uint8Array(state.favorGot);
         for(let i=0;i<favorGot.length;i++)favorGot[i]=Math.min(C.favorNeeds[i],favorGot[i]+cand.favorAdds[i]);
         const wantedMask=state.wantedMask|cand.wantedMask;
         const value=state.value+cand.value;
         const histPenalty=state.histPenalty+cand.histPenalty;
-        const key=pamamaGroupKey(cand.endGroove,favorGot,wantedMask);
+        const key=solverGroupKey(cand.endGroove,favorGot,wantedMask);
         let heap=groups.get(key);if(!heap){heap=[];groups.set(key,heap)}
         // Within the same requirement/groove state, value dominates; recent history is a very light tie-breaker.
         const score=value-histPenalty*0.015;
-        pamamaHeapPush(heap,{score,value,parent:state,cand,favorGot,wantedMask,histPenalty},PAMAMA_PER_GROUP_KEEP);
+        solverHeapPush(heap,{score,value,parent:state,cand,favorGot,wantedMask,histPenalty},SOLVER_PER_GROUP_KEEP);
       }
     }
 
     const lights=[];
     for(const heap of groups.values())lights.push(...heap);
     lights.sort((a,b)=>{
-      const pa=pamamaProgressScore(a),pb=pamamaProgressScore(b);
+      const pa=solverProgressScore(a),pb=solverProgressScore(b);
       const sa=a.value + pa - a.histPenalty*0.015;
       const sb=b.value + pb - b.histPenalty*0.015;
       return sb-sa;
     });
-    beam=lights.slice(0,PAMAMA_WEEK_BEAM).map(pamamaMaterialize);
+    beam=lights.slice(0,SOLVER_WEEK_BEAM).map(solverMaterialize);
     if(!beam.length)break;
   }
 
-  const feasible=beam.filter(pamamaRequirementsMet);
+  const feasible=beam.filter(solverRequirementsMet);
   if(!feasible.length)return null;
   feasible.sort((a,b)=>b.value-a.value || a.histPenalty-b.histPenalty);
   return feasible[0];
 }
-function pamamaBaseLimit(name,workshops){
+function solverBaseLimit(name,workshops){
   const target=standardSoftCap(name);
   const desired=target+5;
   return Math.max(workshops,Math.floor(desired/workshops)*workshops);
 }
-function pamamaLimitArray(workshops,relaxStep){
-  const arr=new Uint16Array(PAMAMA_MATERIAL_NAMES.length);
-  for(let i=0;i<arr.length;i++)arr[i]=pamamaBaseLimit(PAMAMA_MATERIAL_NAMES[i],workshops)+relaxStep*workshops;
+function solverLimitArray(workshops,relaxStep){
+  const arr=new Uint16Array(SOLVER_MATERIAL_NAMES.length);
+  for(let i=0;i<arr.length;i++)arr[i]=solverBaseLimit(SOLVER_MATERIAL_NAMES[i],workshops)+relaxStep*workshops;
   return arr;
 }
-function pamamaRouteToSlots(cand){
-  const C=PAMAMA_CTX,slots=[];
+function solverRouteToSlots(cand){
+  const C=SOLVER_CTX,slots=[];
   const off=cand.routeId*6;
   let groove=cand.startGroove,time=0,prev=null;
   for(let p=0;p<cand.len;p++){
@@ -1188,17 +1188,17 @@ function pamamaRouteToSlots(cand){
   }
   return slots;
 }
-function pamamaBuildMaterialsObject(mats){
+function solverBuildMaterialsObject(mats){
   const out={};
-  for(let i=0;i<mats.length;i++)if(mats[i])out[PAMAMA_MATERIAL_NAMES[i]]=mats[i];
+  for(let i=0;i<mats.length;i++)if(mats[i])out[SOLVER_MATERIAL_NAMES[i]]=mats[i];
   return out;
 }
-function pamamaBuildLimitsObject(limits){
+function solverBuildLimitsObject(limits){
   const out={};
-  for(let i=0;i<limits.length;i++)out[PAMAMA_MATERIAL_NAMES[i]]=limits[i];
+  for(let i=0;i<limits.length;i++)out[SOLVER_MATERIAL_NAMES[i]]=limits[i];
   return out;
 }
-function pamamaProducedFromDays(days){
+function solverProducedFromDays(days){
   const map=new Map();
   for(const day of days)for(const s of day)map.set(s.item.id,(map.get(s.item.id)||0)+s.qty);
   return map;
@@ -1218,7 +1218,7 @@ function chooseSchedule(){
   const avail=available();
   if(!avail.length)throw new Error("使用可能な島産品がありません。");
   const workshops=+$("#workshops").value,cap=grooveCap();
-  const retention=Math.max(0.96,Math.min(1,+($("#retentionSelect")?.value||0.96)));
+  const retention=Math.max(0.90,Math.min(1,+($("#retentionSelect")?.value||0.94)));
   const capPolicy=document.querySelector('input[name="capPolicy"]:checked')?.value||"auto";
 
   const targets=[];
@@ -1244,11 +1244,11 @@ function chooseSchedule(){
     }
   }
 
-  pamamaPrepare(avail,workshops,cap,targets,ACTIVE_WANTED_ITEMS);
-  if(!PAMAMA_CTX.routes.count)throw new Error("現在の条件では、あわせて生産を維持した24時間の日次候補を作れません。");
+  solverPrepare(avail,workshops,cap,targets,ACTIVE_WANTED_ITEMS);
+  if(!SOLVER_CTX.routes.count)throw new Error("現在の条件では、あわせて生産を維持した24時間の日次候補を作れません。");
 
   // Baseline is the best schedule inside the SAME mandatory universe, with no material caps.
-  const baseline=pamamaWeeklySearch(null);
+  const baseline=solverWeeklySearch(null);
   if(!baseline){
     throw new Error("現在の条件では、ねこみみさんのおねがい／作りたい島産品をすべて満たす5日分の候補が見つかりません。");
   }
@@ -1258,8 +1258,8 @@ function chooseSchedule(){
   let bestUnderCap=null;
   const maxRelaxStep=capPolicy==="strict"?0:2;
   for(let step=0;step<=maxRelaxStep;step++){
-    const limits=pamamaLimitArray(workshops,step);
-    const found=pamamaWeeklySearch(limits);
+    const limits=solverLimitArray(workshops,step);
+    const found=solverWeeklySearch(limits);
     if(found){
       bestUnderCap={found,limits,step};
       if(found.value+1e-9>=floor){
@@ -1278,10 +1278,10 @@ function chooseSchedule(){
     throw new Error(`素材上限を2段階まで自動緩和しても、価値の優先度 ${Math.round(retention*100)}% を満たす5日分のスケジュールを生成できません。`);
   }
 
-  const days=chosen.days.map(pamamaRouteToSlots);
-  const usedCount=pamamaProducedFromDays(days);
+  const days=chosen.days.map(solverRouteToSlots);
+  const usedCount=solverProducedFromDays(days);
   const favorNeeds=new Map();
-  for(let i=0;i<targets.length;i++)favorNeeds.set(targets[i],Math.max(0,PAMAMA_CTX.favorNeeds[i]-(chosen.favorGot[i]||0)));
+  for(let i=0;i<targets.length;i++)favorNeeds.set(targets[i],Math.max(0,SOLVER_CTX.favorNeeds[i]-(chosen.favorGot[i]||0)));
   const totalSlots=days.reduce((s,d)=>s+d.length*workshops,0);
   const effTransitions=days.reduce((s,d)=>s+d.filter(x=>x.eff).length,0);
 
@@ -1291,10 +1291,10 @@ function chooseSchedule(){
     valueRatio:baseline.value?chosen.value/baseline.value:1,
     retention,relaxStep,capPolicy,
     effTransitions,totalSlots,groove:chosen.groove,grooveCap:cap,
-    materials:pamamaBuildMaterialsObject(chosen.mats),
-    materialLimits:pamamaBuildLimitsObject(chosenLimits),
-    pamamaRoutes:PAMAMA_CTX.routes.count,
-    pamamaDailyCaches:PAMAMA_CTX.dayCache.size,
+    materials:solverBuildMaterialsObject(chosen.mats),
+    materialLimits:solverBuildLimitsObject(chosenLimits),
+    solverRoutes:SOLVER_CTX.routes.count,
+    solverDailyCaches:SOLVER_CTX.dayCache.size,
     materialPenalty:0
   };
 }
@@ -1464,7 +1464,10 @@ function retentionDisplayLabel(v){
   if(pct===99)return "かなり価値重視（99%）";
   if(pct===98)return "価値重視（98%）";
   if(pct===97)return "やや価値重視（97%）";
-  return "バランス重視（96%）";
+  if(pct===96)return "やや価値重視（96%）";
+  if(pct===94)return "バランス重視（94%）";
+  if(pct===92)return "素材負担を優先（92%）";
+  return "素材負担をかなり優先（90%）";
 }
 function renderSummary(){
   const unmet=[...LAST.favorNeeds.entries()].filter(([_,n])=>n>0);
@@ -1526,12 +1529,12 @@ function renderMaterials(){
   $("#historyStatus").textContent=hc?`確定済み履歴：${hc}週`:"";
   $("#materialGrid").innerHTML=rows.map(([name,qty])=>{
     const t=materialType(name);
-    const limit=LAST.materialLimits?.[name] ?? pamamaBaseLimit(name,LAST.workshops||1);
+    const limit=LAST.materialLimits?.[name] ?? solverBaseLimit(name,LAST.workshops||1);
     const cls=qty>limit?"very-heavy":qty===limit?"heavy":"";
     let hint=t==="granary"?"グラナリー":t==="animal"?"飼育":t==="crop"?"作物":"採集";
     return `<div class="material-card ${cls}">
       <span class="mname">${t==="granary"?"⚠ ":""}${name} <span class="pill">${hint}</span></span>
-      <span class="mqty">×${qty} <span class="small">/ 上限${limit}</span></span>
+      <span class="mqty">×${qty}</span>
     </div>`;
   }).join("");
 }
@@ -1670,7 +1673,7 @@ $("#saveBtn").onclick=()=>{save();alert("設定を保存しました。")};
 $("#reset").onclick=()=>{
   localStorage.removeItem(STORAGE_KEY);excludedMaterials.clear();wantedItems.clear();
   $("#rank").value=5;$("#workshops").value=3;$("#landmarks").value=2;
-  $("#favorOff").checked=true;$("#favorOn").checked=false;$("#favors").classList.remove("on");$("#searchModeSelect").value="standard";if($("#retentionSelect"))$("#retentionSelect").value="0.96";const autoCapPolicy=document.querySelector('input[name="capPolicy"][value="auto"]');if(autoCapPolicy)autoCapPolicy.checked=true;$("#capGather").value=25;$("#capCrop").value=20;$("#capAnimal").value=16;$("#capGranary").value=12;
+  $("#favorOff").checked=true;$("#favorOn").checked=false;$("#favors").classList.remove("on");$("#searchModeSelect").value="standard";if($("#retentionSelect"))$("#retentionSelect").value="0.94";const autoCapPolicy=document.querySelector('input[name="capPolicy"][value="auto"]');if(autoCapPolicy)autoCapPolicy.checked=true;$("#capGather").value=25;$("#capCrop").value=20;$("#capAnimal").value=16;$("#capGranary").value=12;
   fillFavorSelects();renderExclude();updateExcludeSummary();
   $("#summary").innerHTML=`
     <div class="summary-card"><div class="label">工房の数</div><div class="value">-</div></div>
