@@ -11,7 +11,7 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v1.5.0</span>
+      <span class="ver">v1.4.0-beam-test</span>
     </div>
 
   </div>
@@ -45,7 +45,7 @@
         <details id="wantedDetails">
           <summary class="panel-title wanted-summary">作りたい島産品 <span id="wantedCount" class="summary-count">0件選択</span></summary>
           <div class="panel-body">
-            <div class="small wanted-help">ゲーム内で需要や供給を確認し、優先して使用したい島産品がある場合に選択してください。可能な範囲でスケジュールへの組み込みを優先します。</div>
+            <div class="small wanted-help">ゲーム内で需要や供給を確認し、今週必ず使用したい島産品がある場合に選択してください。選択した島産品は週5日のどこかに最低1回、必須条件として組み込みます。</div>
             <input id="wantedFilter" type="text" placeholder="島産品名を検索">
             <div id="wantedGrid" class="exclude-box wanted-box" style="margin-top:8px"></div>
           </div>
@@ -73,22 +73,23 @@
 <section class="panel search-panel">
         <details id="searchSettingsDetails">
           <summary class="panel-title search-summary">検索設定</summary>
-          <div class="small" style="padding:0 14px 8px">価値維持ライン以上の候補から素材負担の軽い案を選び、確定済みの直近数週間で多く使った素材は少しだけ選ばれにくくなります。</div>
+          <div class="small" style="padding:0 14px 8px">日次ランキングを作成し、週5日を組み合わせる段階で素材上限を直接守ります。直近の確定履歴は、同程度の候補での軽い優先順位にだけ使用します。</div>
           <div class="panel-body">
+          <input id="searchModeSelect" type="hidden" value="standard">
           <div class="form-row">
             <label>価値維持ライン</label>
-            <select id="valueRetention">
-              <option value="0.95">95%　素材分散寄り</option>
-              <option value="0.96" selected>96%　おすすめ</option>
-              <option value="0.97">97%　価値寄り</option>
-              <option value="0.98">98%　価値重視</option>
-              <option value="0.99">99%　かなり価値重視</option>
-              <option value="1.00">100%　最高価値優先</option>
+            <select id="retentionSelect">
+              <option value="0.95">95%（素材分散寄り）</option>
+              <option value="0.96" selected>96%（おすすめ）</option>
+              <option value="0.97">97%（価値寄り）</option>
+              <option value="0.98">98%（価値重視）</option>
+              <option value="0.99">99%（かなり価値重視）</option>
+              <option value="1">100%（最高価値優先）</option>
             </select>
+            <div class="small" style="margin-top:5px">必須条件を満たした素材制限なしの最高価値に対して、何%以上を維持するか指定します。</div>
           </div>
-          <div class="small value-retention-help">その日の最高価値に対して、何%以上の候補から素材分散するかを指定します。数値を上げるほど価値を優先し、素材が偏りやすくなります。</div>
 
-          <div id="searchDetails" style="margin-top:10px">
+          <div id="searchDetails" style="margin-top:12px">
             <div style="font-weight:700;color:#4d493f;margin-bottom:9px">素材使用の目安</div>
             <div style="display:grid;grid-template-columns:1fr 72px;gap:6px 8px;align-items:center">
               <label for="capGather">採集素材</label><input id="capGather" type="number" min="4" max="99" value="25">
@@ -96,7 +97,7 @@
               <label for="capAnimal">飼育動物素材</label><input id="capAnimal" type="number" min="4" max="99" value="16">
               <label for="capGranary">グラナリー素材</label><input id="capGranary" type="number" min="4" max="99" value="12">
             </div>
-            <div class="small" style="margin-top:7px">設定値+5までは誤差として扱い、+6〜+10は通常ペナルティ、+11以上は強いペナルティをかけます。</div>
+            <div class="small" style="margin-top:7px">まず「目安＋5」以内をハード上限として探索します（工房数の刻みに合わせて切り下げ）。価値維持ラインに届かない場合だけ、工房数ぶんずつ最大2段階まで自動で緩和します。例：作物20・4工房 → 24 → 28 → 32。</div>
           </div>
 
           </div>
@@ -187,7 +188,7 @@
       <section id="materialPanel" class="panel material-panel" style="display:none">
         <div class="panel-title">5日分の必要素材</div>
         <div id="materialGrid" class="material-grid"></div>
-        <div class="note">※ 表示数は全工房分です。標準検索では5日間の累計素材数と「素材使用の目安」を使って、同じ素材への偏りを避けます。</div>
+        <div class="note">※ 表示数は全工房分です。生成時は各素材の実効上限を1個でも超える週間候補を除外します。手動の置き換え後は上限超過も表示されます。</div>
       </section>
 
       <div class="info-box">
@@ -202,10 +203,11 @@
         <div class="info-divider"></div>
         <h3 class="algo-title">生成アルゴリズム</h3>
         <ul>
-          <li>1〜2日目は4時間品を中心に「やる気」を育成し、あわせて生産を強く優先します。</li>
-          <li>ねこみみさんのおねがいを有効にしている場合、必須条件として生成します。</li>
-          <li>「作りたい島産品」の設定を優先しつつ、青船貨と素材負担のバランスが良いスケジュールを探索します。</li>
-          <li>価値維持ライン以上の候補から素材負担の軽い案を優先します。数値を上げるほど価値を優先し、素材が偏りやすくなります。</li>
+          <li>各日について、24時間ぴったり・毎回あわせて生産・同じ島産品を1日に重複させない候補を価値順にランキングします。</li>
+          <li>週5日を組み合わせるBeam探索では、週間素材数を正確に数え、実効上限を超えた候補をその場で除外します。</li>
+          <li>ねこみみさんのおねがいと「作りたい島産品」は、どちらも必須条件として生成します。</li>
+          <li>素材上限内で価値維持ラインを満たせない時だけ、上限を工房数ぶんずつ最大2段階まで自動緩和します。</li>
+          <li>確定済みの直近数週間の素材履歴は、価値がほぼ同じ候補の軽いタイブレークとして使います。</li>
         </ul>
       </div>
     </main>

@@ -735,11 +735,3 @@ details:not([open])>summary.panel-title::after{
   font-weight:800;
   line-height:1;
 }
-
-/* v1.5.0 */
-.value-retention-help{
-  margin-top:6px;
-  color:#716a5f;
-  font-size:11px;
-  line-height:1.55;
-}

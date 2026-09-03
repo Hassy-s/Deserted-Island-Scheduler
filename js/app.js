@@ -125,7 +125,8 @@ function save(){
     excludedMaterials:[...excludedMaterials],
     wantedItems:[...wantedItems],
     favor:favorEnabled(),
-    valueRetention:valueRetention(),
+    searchMode:"standard",
+    retention:+$("#retentionSelect").value,
     capGather:+$("#capGather").value,
     capCrop:+$("#capCrop").value,
     capAnimal:+$("#capAnimal").value,
@@ -154,10 +155,8 @@ function load(){
     $("#favor4").value="";
     $("#favor6").value="";
     $("#favor8").value="";
-    $("#valueRetention").value =
-      (s.valueRetention!==undefined && +s.valueRetention>=0.95 && +s.valueRetention<=1)
-        ? String(+s.valueRetention)
-        : "0.96";
+    $("#searchModeSelect").value="standard";
+    if(s.retention!==undefined && $("#retentionSelect")) $("#retentionSelect").value=String(s.retention);
     if(s.capGather!==undefined)$("#capGather").value=s.capGather;
     if(s.capCrop!==undefined)$("#capCrop").value=s.capCrop;
     if(s.capAnimal!==undefined)$("#capAnimal").value=s.capAnimal;
@@ -290,20 +289,15 @@ function addMaterials(total,item,workshops){
   return out;
 }
 
-function rawSearchMode(){ return "standard"; }
-function searchMode(){ return "standard"; }
-function valueRetention(){
-  const el=$("#valueRetention");
-  const v=el?+el.value:0.96;
-  return Number.isFinite(v) && v>=0.95 && v<=1 ? v : 0.96;
-}
+function rawSearchMode(){ return $("#searchModeSelect").value==="max" ? "max" : "standard"; }
+function searchMode(){ return ACTIVE_SEARCH_MODE || rawSearchMode(); }
 
 function materialType(name){
   return MATERIAL_PROGRESS[name]?.category || "gather";
 }
 
 function comfortLimit(name){
-  // Search Settings define the material comfort threshold; +5 is the free weekly margin.
+  // Search Settings now define the actual material comfort threshold.
   return standardSoftCap(name);
 }
 
@@ -365,24 +359,19 @@ function materialCostForQty(name,qty){
   const w=materialWeight(name);
   const limit=comfortLimit(name);
 
-  // v1.4.1 C-engine test:
-  // The user's configured amount is a real target, but +5 is treated as
-  // harmless weekly variation. Only usage above that tolerance is penalized.
-  const freeLine=limit+5;
-  const normalLine=limit+10;
+  // Up to the comfort amount, cost is intentionally gentle.
+  const baseQty=Math.min(qty,limit);
+  let cost=baseQty*w*1.4;
 
-  let cost=0;
+  // Once the material passes the comfort line, every extra piece
+  // becomes progressively more expensive.
+  const over=Math.max(0,qty-limit);
+  cost += over*over*w*22.0;
 
-  // +6 .. +10: normal penalty. This should encourage another route without
-  // destroying a clearly better-value schedule.
-  const normalOver=Math.max(0,Math.min(qty,normalLine)-freeLine);
-  cost += normalOver*normalOver*w*18.0;
-
-  // +11 and beyond: strong penalty. If the user is comfortable with this
-  // amount they can raise the configured target instead.
-  const strongOver=Math.max(0,qty-normalLine);
-  cost += strongOver*strongOver*w*90.0;
-  cost += strongOver*5*w*18.0; // keep the transition continuous/meaningful
+  // If it keeps climbing well past the comfort line, strongly encourage
+  // the search to switch to other materials.
+  const severe=Math.max(0,qty-(limit+8));
+  cost += severe*severe*w*42.0;
 
   return cost;
 }
@@ -612,10 +601,13 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
         );
         if(earlyAllowedFits.length) fits=earlyAllowedFits;
       }
-      // v1.4.1 C-engine:
-      // While the DAY-START groove is below 40, only the first slot is forced
-      // to 4H. After that first craft, 4H / 6H / 8H are all free candidates.
-      if(startGroove<40 && st.time===0){
+
+      // v0.38 groove-growth rule:
+      // During days 1-2, use 4h crafts only while current groove is below
+      // the CURRENT progression cap (25 / 35 / 45 etc.).
+      // The instant the cap is reached, release the restriction even if
+      // there are hours left in the same day.
+      if(dayIndex<=1 && st.groove<cap){
         const fourHourFits=fits.filter(i=>i.time===4);
         if(fourHourFits.length) fits=fourHourFits;
       }
@@ -642,7 +634,16 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
             practicalPool=underCap;
           }
         }
-        fits=practicalPool;
+
+        const efficientPool=practicalPool.filter(item=>efficient(st.prev,item));
+        if(efficientPool.length){
+          // v1.1.5: when an efficient continuation exists, stay on efficient
+          // production. This prevents an unfinished Favor from being inserted
+          // non-efficiently (4 items) when it can instead be completed as 8.
+          fits=efficientPool;
+        }else{
+          fits=practicalPool;
+        }
       }
 
       if(!fits.length){
@@ -697,9 +698,9 @@ function daySearch(avail, workshops, cap, startGroove, startFavor, startMaterial
       if(dayIndex>=2 && favorEnabled()){
         const requiredRanked=ranked.filter(x=>(st.favor?.[x.item.id]||0)>0);
         const normalRanked=ranked.filter(x=>(st.favor?.[x.item.id]||0)<=0);
-        ranked=[...requiredRanked,...normalRanked.slice(0,8)];
+        ranked=[...requiredRanked,...normalRanked.slice(0,6)];
       }else{
-        ranked=ranked.slice(0,8);
+        ranked=ranked.slice(0,6);
       }
 
       for(const {item} of ranked){
@@ -869,170 +870,414 @@ function preserveEarlyWeekDiversity(weeks, dayIndex, cap){
   return weeks.slice(0,48);
 }
 
+
+// v1.4.0-beam-test ---------------------------------------------------------
+// Pamama-style daily ranking + exact weekly material-cap Beam search.
+// No material-price / penalty tuning is used for the generation decision.
+const PAMAMA_K_PER_LEN=80;
+const PAMAMA_REQ_K=20;
+const PAMAMA_WEEK_BEAM=650;
+const PAMAMA_PER_GROUP_KEEP=90;
+const PAMAMA_ITEM_INDEX=new Map(ITEMS.map((item,i)=>[item.id,i]));
+const PAMAMA_MATERIAL_NAMES=Object.keys(MATERIAL_UNLOCK).sort();
+let PAMAMA_CTX=null;
+
+function pamamaBitCount(mask){
+  let n=0n,c=0;
+  while(mask){ n += mask&1n; mask >>= 1n; }
+  return Number(n);
+}
+function pamamaHeapPush(heap,obj,limit,field="score"){
+  const val=obj[field];
+  if(heap.length<limit){
+    heap.push(obj);
+    let i=heap.length-1;
+    while(i>0){
+      const p=(i-1)>>1;
+      if(heap[p][field]<=heap[i][field])break;
+      [heap[p],heap[i]]=[heap[i],heap[p]];i=p;
+    }
+    return;
+  }
+  if(val<=heap[0][field])return;
+  heap[0]=obj;
+  let i=0;
+  for(;;){
+    let a=i*2+1,b=a+1,s=i;
+    if(a<heap.length&&heap[a][field]<heap[s][field])s=a;
+    if(b<heap.length&&heap[b][field]<heap[s][field])s=b;
+    if(s===i)break;
+    [heap[i],heap[s]]=[heap[s],heap[i]];i=s;
+  }
+}
+function pamamaPrepare(avail,workshops,cap,targets,wantedIds){
+  const availableIdx=avail.map(x=>PAMAMA_ITEM_INDEX.get(x.id));
+  const allowed=new Uint8Array(ITEMS.length);
+  for(const idx of availableIdx)allowed[idx]=1;
+
+  const adj=Array.from({length:ITEMS.length},()=>[]);
+  for(const i of availableIdx){
+    const a=ITEMS[i];
+    for(const j of availableIdx){
+      if(i!==j && efficient(a,ITEMS[j])) adj[i].push(j);
+    }
+  }
+
+  const wantedList=[...wantedIds];
+  const wantedBitByItemId=new Map();
+  for(let i=0;i<wantedList.length;i++) wantedBitByItemId.set(wantedList[i],1n<<BigInt(i));
+  const wantedAllMask=wantedList.length ? (1n<<BigInt(wantedList.length))-1n : 0n;
+
+  const favorIds=[...targets];
+  const favorNeeds=favorIds.map(id=>{
+    const item=ITEMS.find(x=>x.id===id);
+    return item?.time===6 ? 6 : 8;
+  });
+  const favorIndexByItemId=new Map(favorIds.map((id,i)=>[id,i]));
+  const requiredGlobalIdx=new Set();
+  for(const id of wantedList){const gi=PAMAMA_ITEM_INDEX.get(id);if(gi!==undefined)requiredGlobalIdx.add(gi)}
+  for(const id of favorIds){const gi=PAMAMA_ITEM_INDEX.get(id);if(gi!==undefined)requiredGlobalIdx.add(gi)}
+
+  PAMAMA_CTX={
+    avail,availableIdx,allowed,adj,workshops,cap,
+    wantedList,wantedBitByItemId,wantedAllMask,
+    favorIds,favorNeeds,favorIndexByItemId,requiredGlobalIdx,
+    routes:null,dayCache:new Map(),routeMatCache:new Map(),maskCountCache:new Map(),
+    history:ACTIVE_HISTORY_MATERIALS||{}
+  };
+  pamamaEnumerateRoutes();
+}
+function pamamaEnumerateRoutes(){
+  const C=PAMAMA_CTX;
+  let capacity=650000,count=0;
+  let slots=new Uint8Array(capacity*6),lens=new Uint8Array(capacity);
+  const route=new Uint8Array(6),used=new Uint8Array(ITEMS.length);
+  function grow(){
+    capacity=Math.floor(capacity*1.45);
+    const ns=new Uint8Array(capacity*6),nl=new Uint8Array(capacity);
+    ns.set(slots);nl.set(lens);slots=ns;lens=nl;
+  }
+  function save(depth){
+    if(count>=capacity)grow();
+    const off=count*6;
+    for(let p=0;p<depth;p++)slots[off+p]=route[p];
+    lens[count]=depth;count++;
+  }
+  function dfs(time,prev,depth){
+    if(time===24){save(depth);return;}
+    const candidates=prev<0?C.availableIdx:C.adj[prev];
+    for(let k=0;k<candidates.length;k++){
+      const idx=candidates[k];
+      if(used[idx])continue;
+      const h=ITEMS[idx].time;
+      if(time+h>24)continue;
+      route[depth]=idx;used[idx]=1;
+      dfs(time+h,idx,depth+1);
+      used[idx]=0;
+    }
+  }
+  dfs(0,-1,0);
+  C.routes={slots,lens,count};
+}
+function pamamaRouteMaterials(routeId){
+  const C=PAMAMA_CTX;
+  if(C.routeMatCache.has(routeId))return C.routeMatCache.get(routeId);
+  const totals=new Uint16Array(PAMAMA_MATERIAL_NAMES.length),touched=[];
+  const len=C.routes.lens[routeId],off=routeId*6;
+  for(let p=0;p<len;p++){
+    const item=ITEMS[C.routes.slots[off+p]];
+    for(const m of (item.materials||[])){
+      const mi=MATERIAL_INDEX[m.name];
+      if(totals[mi]===0)touched.push(mi);
+      totals[mi]+=m.qty*C.workshops;
+    }
+  }
+  const sparse=touched.map(mi=>[mi,totals[mi]]);
+  C.routeMatCache.set(routeId,sparse);
+  return sparse;
+}
+function pamamaRouteRequirementInfo(routeId){
+  const C=PAMAMA_CTX;
+  const len=C.routes.lens[routeId],off=routeId*6;
+  let wantedMask=0n,coverScore=0;
+  const favorAdds=new Uint8Array(C.favorIds.length);
+  const requiredIndices=[];
+  for(let p=0;p<len;p++){
+    const gi=C.routes.slots[off+p],item=ITEMS[gi];
+    const wb=C.wantedBitByItemId.get(item.id);
+    if(wb!==undefined && !(wantedMask&wb)){wantedMask|=wb;coverScore+=100000;}
+    const fi=C.favorIndexByItemId.get(item.id);
+    if(fi!==undefined){
+      const qty=C.workshops*(p===0?1:2);
+      favorAdds[fi]=Math.min(255,qty);
+      coverScore += Math.min(qty,C.favorNeeds[fi])*18000;
+    }
+    if(C.requiredGlobalIdx.has(gi))requiredIndices.push(gi);
+  }
+  return {wantedMask,favorAdds,coverScore,requiredIndices};
+}
+function pamamaDailyCandidates(startGroove){
+  const C=PAMAMA_CTX;
+  if(C.dayCache.has(startGroove))return C.dayCache.get(startGroove);
+
+  const slotValue=Array.from({length:6},()=>new Int32Array(ITEMS.length));
+  let g=startGroove;
+  for(let pos=0;pos<6;pos++){
+    if(pos>0)g=Math.min(C.cap,g+C.workshops);
+    const qty=C.workshops*(pos===0?1:2);
+    for(const gi of C.availableIdx)slotValue[pos][gi]=slotExportValue(ITEMS[gi],qty,g);
+  }
+
+  const general={3:[],4:[],5:[],6:[]},coverage={3:[],4:[],5:[],6:[]};
+  const reqHeaps=new Map();
+  for(const gi of C.requiredGlobalIdx)reqHeaps.set(gi,{3:[],4:[],5:[],6:[]});
+
+  for(let r=0;r<C.routes.count;r++){
+    const len=C.routes.lens[r],off=r*6;
+    let value=0;
+    for(let p=0;p<len;p++)value+=slotValue[p][C.routes.slots[off+p]];
+    pamamaHeapPush(general[len],{routeId:r,value,score:value},PAMAMA_K_PER_LEN);
+
+    if(C.requiredGlobalIdx.size){
+      const info=pamamaRouteRequirementInfo(r);
+      pamamaHeapPush(coverage[len],{routeId:r,value,score:value+info.coverScore},PAMAMA_K_PER_LEN);
+      for(const gi of info.requiredIndices){
+        const hs=reqHeaps.get(gi);
+        if(hs)pamamaHeapPush(hs[len],{routeId:r,value,score:value},PAMAMA_REQ_K);
+      }
+    }
+  }
+
+  const routeIds=new Set();
+  for(const len of [3,4,5,6]){
+    for(const x of general[len])routeIds.add(x.routeId);
+    for(const x of coverage[len])routeIds.add(x.routeId);
+  }
+  for(const hs of reqHeaps.values())for(const len of [3,4,5,6])for(const x of hs[len])routeIds.add(x.routeId);
+
+  const out=[];
+  for(const routeId of routeIds){
+    const len=C.routes.lens[routeId],off=routeId*6;
+    let value=0,groove=startGroove;
+    for(let p=0;p<len;p++){
+      if(p>0)groove=Math.min(C.cap,groove+C.workshops);
+      value+=slotValue[p][C.routes.slots[off+p]];
+    }
+    const info=pamamaRouteRequirementInfo(routeId);
+    let histPenalty=0;
+    const mats=pamamaRouteMaterials(routeId);
+    for(const [mi,q] of mats){
+      const name=PAMAMA_MATERIAL_NAMES[mi];
+      histPenalty+=(C.history[name]||0)*q*0.42;
+    }
+    out.push({routeId,len,value,startGroove,endGroove:groove,mats,histPenalty,...info});
+  }
+  out.sort((a,b)=>b.value-a.value);
+  C.dayCache.set(startGroove,out);
+  return out;
+}
+function pamamaMaskCount(mask){
+  const C=PAMAMA_CTX,key=mask.toString();
+  if(C.maskCountCache.has(key))return C.maskCountCache.get(key);
+  const n=pamamaBitCount(mask);C.maskCountCache.set(key,n);return n;
+}
+function pamamaRequirementsMet(st){
+  const C=PAMAMA_CTX;
+  if(st.wantedMask!==C.wantedAllMask)return false;
+  for(let i=0;i<C.favorNeeds.length;i++)if((st.favorGot[i]||0)<C.favorNeeds[i])return false;
+  return true;
+}
+function pamamaProgressScore(st){
+  const C=PAMAMA_CTX;
+  let score=pamamaMaskCount(st.wantedMask)*3200;
+  for(let i=0;i<C.favorNeeds.length;i++)score+=Math.min(st.favorGot[i]||0,C.favorNeeds[i])*700;
+  return score;
+}
+function pamamaGroupKey(endGroove,favorGot,wantedMask){
+  return `${endGroove}|${Array.from(favorGot).join(",")}|${wantedMask.toString()}`;
+}
+function pamamaFitsLimits(mats,sparse,limits){
+  if(!limits)return true;
+  for(const [mi,q] of sparse)if(mats[mi]+q>limits[mi])return false;
+  return true;
+}
+function pamamaMaterialize(light){
+  const C=PAMAMA_CTX;
+  const mats=new Uint16Array(light.parent.mats);
+  for(const [mi,q] of light.cand.mats)mats[mi]+=q;
+  return {
+    value:light.value,groove:light.cand.endGroove,mats,
+    days:light.parent.days.concat(light.cand),
+    favorGot:light.favorGot,wantedMask:light.wantedMask,
+    histPenalty:light.histPenalty
+  };
+}
+function pamamaWeeklySearch(limits){
+  const C=PAMAMA_CTX;
+  let beam=[{
+    value:0,groove:0,mats:new Uint16Array(PAMAMA_MATERIAL_NAMES.length),days:[],
+    favorGot:new Uint8Array(C.favorIds.length),wantedMask:0n,histPenalty:0
+  }];
+
+  for(let day=0;day<5;day++){
+    const groups=new Map();
+    for(const state of beam){
+      const cands=pamamaDailyCandidates(state.groove);
+      for(const cand of cands){
+        if(!pamamaFitsLimits(state.mats,cand.mats,limits))continue;
+        const favorGot=new Uint8Array(state.favorGot);
+        for(let i=0;i<favorGot.length;i++)favorGot[i]=Math.min(C.favorNeeds[i],favorGot[i]+cand.favorAdds[i]);
+        const wantedMask=state.wantedMask|cand.wantedMask;
+        const value=state.value+cand.value;
+        const histPenalty=state.histPenalty+cand.histPenalty;
+        const key=pamamaGroupKey(cand.endGroove,favorGot,wantedMask);
+        let heap=groups.get(key);if(!heap){heap=[];groups.set(key,heap)}
+        // Within the same requirement/groove state, value dominates; recent history is a very light tie-breaker.
+        const score=value-histPenalty*0.015;
+        pamamaHeapPush(heap,{score,value,parent:state,cand,favorGot,wantedMask,histPenalty},PAMAMA_PER_GROUP_KEEP);
+      }
+    }
+
+    const lights=[];
+    for(const heap of groups.values())lights.push(...heap);
+    lights.sort((a,b)=>{
+      const pa=pamamaProgressScore(a),pb=pamamaProgressScore(b);
+      const sa=a.value + pa - a.histPenalty*0.015;
+      const sb=b.value + pb - b.histPenalty*0.015;
+      return sb-sa;
+    });
+    beam=lights.slice(0,PAMAMA_WEEK_BEAM).map(pamamaMaterialize);
+    if(!beam.length)break;
+  }
+
+  const feasible=beam.filter(pamamaRequirementsMet);
+  if(!feasible.length)return null;
+  feasible.sort((a,b)=>b.value-a.value || a.histPenalty-b.histPenalty);
+  return feasible[0];
+}
+function pamamaBaseLimit(name,workshops){
+  const target=standardSoftCap(name);
+  const desired=target+5;
+  return Math.max(workshops,Math.floor(desired/workshops)*workshops);
+}
+function pamamaLimitArray(workshops,relaxStep){
+  const arr=new Uint16Array(PAMAMA_MATERIAL_NAMES.length);
+  for(let i=0;i<arr.length;i++)arr[i]=pamamaBaseLimit(PAMAMA_MATERIAL_NAMES[i],workshops)+relaxStep*workshops;
+  return arr;
+}
+function pamamaRouteToSlots(cand){
+  const C=PAMAMA_CTX,slots=[];
+  const off=cand.routeId*6;
+  let groove=cand.startGroove,time=0,prev=null;
+  for(let p=0;p<cand.len;p++){
+    const item=ITEMS[C.routes.slots[off+p]];
+    const isEff=p>0;
+    const grooveBefore=groove;
+    const grooveAfter=isEff?Math.min(C.cap,groove+C.workshops):groove;
+    const qty=C.workshops*(isEff?2:1);
+    const valueWithGroove=slotExportValue(item,qty,grooveAfter);
+    slots.push({item,start:time,end:time+item.time,eff:isEff,qty,grooveBefore,grooveAfter,valueWithGroove});
+    time+=item.time;groove=grooveAfter;prev=item;
+  }
+  return slots;
+}
+function pamamaBuildMaterialsObject(mats){
+  const out={};
+  for(let i=0;i<mats.length;i++)if(mats[i])out[PAMAMA_MATERIAL_NAMES[i]]=mats[i];
+  return out;
+}
+function pamamaBuildLimitsObject(limits){
+  const out={};
+  for(let i=0;i<limits.length;i++)out[PAMAMA_MATERIAL_NAMES[i]]=limits[i];
+  return out;
+}
+function pamamaProducedFromDays(days){
+  const map=new Map();
+  for(const day of days)for(const s of day)map.set(s.item.id,(map.get(s.item.id)||0)+s.qty);
+  return map;
+}
+
 function chooseSchedule(){
-  ACTIVE_SEARCH_MODE=rawSearchMode();
+  ACTIVE_SEARCH_MODE="standard";
   ACTIVE_CAPS={
     "#capGather":+$("#capGather").value,
     "#capCrop":+$("#capCrop").value,
     "#capAnimal":+$("#capAnimal").value,
     "#capGranary":+$("#capGranary").value
   };
-  ACTIVE_HISTORY_MATERIALS=ACTIVE_SEARCH_MODE==="standard" ? weightedHistoryMaterials() : {};
+  ACTIVE_HISTORY_MATERIALS=weightedHistoryMaterials();
   ACTIVE_WANTED_ITEMS=new Set([...wantedItems].filter(id=>ITEMS.some(i=>i.id===id)));
 
   const avail=available();
-  if(!avail.length) throw new Error("使用可能な島産品がありません。");
+  if(!avail.length)throw new Error("使用可能な島産品がありません。");
+  const workshops=+$("#workshops").value,cap=grooveCap();
+  const retention=Math.max(0.95,Math.min(1,+($("#retentionSelect")?.value||0.96)));
 
-  const workshops=+$("#workshops").value;
-  const cap=grooveCap();
-
-  const favorStart={};
   const targets=[];
   if(favorEnabled()){
     for(const [t,n] of [[4,8],[6,6],[8,8]]){
       const id=+$("#favor"+t).value;
-      if(!id) throw new Error(`${t}時間品のお願いを選択してください。`);
+      if(!id)throw new Error(`${t}時間品のお願いを選択してください。`);
       const item=ITEMS.find(x=>x.id===id);
-      if(!item) throw new Error(`${t}時間品が現在の条件では使用できません。`);
+      if(!item||!avail.some(x=>x.id===id))throw new Error(`${t}時間品が現在の条件では使用できません。`);
       if(itemUsesExcludedMaterial(item)){
         const names=(item.materials||[]).filter(m=>excludedMaterials.has(m.name)).map(m=>m.name).join("、");
         throw new Error(`ねこみみさんのおねがいの${t}時間品に、除外した素材（${names}）が含まれています。`);
       }
-      if(!avail.some(x=>x.id===id)) throw new Error(`${t}時間品が現在の条件では使用できません。`);
-      favorStart[id]=n;
       targets.push(id);
     }
   }
 
-  // v1.4.1 C-engine:
-  // Optimize one complete 24h day at a time.  The end groove, remaining Favor
-  // and accumulated materials are handed directly to the next day.
-  let state={
-    groove:0,
-    favor:cloneFavor(favorStart),
-    value:0,
-    effTransitions:0,
-    days:[],
-    produced:{},
-    materials:{},
-    grooveHistory:[]
-  };
-
-  for(let day=0;day<5;day++){
-    const dayCandidates=daySearch(
-      avail,workshops,cap,state.groove,state.favor,state.materials,
-      110,day
-    );
-
-    if(!dayCandidates.length){
-      throw new Error(`${day+1}日目の24時間スケジュールを生成できません。`);
+  // Wanted products are hard requirements in the new engine.
+  for(const id of ACTIVE_WANTED_ITEMS){
+    if(!avail.some(x=>x.id===id)){
+      const item=ITEMS.find(x=>x.id===id);
+      throw new Error(`作りたい島産品「${item?.name||id}」が現在の条件では使用できません。`);
     }
-
-    const remainingDays=4-day;
-
-    // Never choose a day that makes the mandatory Favor impossible to finish
-    // in the remaining days, using a conservative no-efficiency estimate.
-    let feasible=dayCandidates.filter(dc=>{
-      if(!favorEnabled()) return true;
-      if(remainingDays===0) return favorPenalty(dc.favor)===0;
-      return favorHoursNeededConservative(dc.favor,workshops)<=remainingDays*24;
-    });
-    if(!feasible.length) feasible=dayCandidates;
-
-    const maxDayValue=Math.max(...feasible.map(dc=>dc.value));
-    let pool=feasible;
-
-    if(searchMode()==="standard"){
-      // Keep at least 95% of the best value for THIS day.
-      // Within that high-value band, material dispersion wins.
-      const floor=maxDayValue*valueRetention();
-      const highValue=feasible.filter(dc=>dc.value>=floor);
-      if(highValue.length) pool=highValue;
-
-      pool=pool.slice().sort((a,b)=>{
-        // Mandatory Favor progress first when late in the week.
-        if(favorEnabled()){
-          const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
-          if(day>=2 && pa!==pb) return pa-pb;
-        }
-
-        const burdenA=practicalBurden(a.materials,[...state.days,a.slots]);
-        const burdenB=practicalBurden(b.materials,[...state.days,b.slots]);
-        if(burdenA!==burdenB) return burdenA-burdenB;
-
-        // User-selected "作りたい島産品" is a meaningful tie-breaker inside
-        // the already-high-value / material-safe zone.
-        const wa=wantedWeekBonus([...state.days,a.slots]);
-        const wb=wantedWeekBonus([...state.days,b.slots]);
-        if(wa!==wb) return wb-wa;
-
-        return b.value-a.value;
-      });
-    }else{
-      pool=pool.slice().sort((a,b)=>{
-        if(favorEnabled()){
-          const pa=favorPenalty(a.favor), pb=favorPenalty(b.favor);
-          if(day===4 && pa!==pb) return pa-pb;
-        }
-        const wa=wantedWeekBonus([...state.days,a.slots]);
-        const wb=wantedWeekBonus([...state.days,b.slots]);
-        return (b.value+wb)-(a.value+wa);
-      });
-    }
-
-    const dc=pool[0];
-
-    const produced={...state.produced};
-    for(const sl of dc.slots){
-      produced[sl.item.id]=(produced[sl.item.id]||0)+sl.qty;
-    }
-
-    state={
-      groove:dc.groove,
-      favor:cloneFavor(dc.favor),
-      value:state.value+dc.value,
-      effTransitions:state.effTransitions+dc.effTransitions,
-      days:[...state.days,dc.slots],
-      produced,
-      materials:{...dc.materials},
-      grooveHistory:[...state.grooveHistory,dc.groove]
-    };
   }
 
-  if(favorEnabled() && favorPenalty(state.favor)!==0){
-    let details=[];
-    for(const id of targets){
-      const item=ITEMS.find(i=>i.id===id);
-      const need=item.time===6?6:8;
-      const got=Math.min(need,state.produced[id]||0);
-      if(got<need) details.push(`${item.name}: ${got}/${need}`);
+  pamamaPrepare(avail,workshops,cap,targets,ACTIVE_WANTED_ITEMS);
+  if(!PAMAMA_CTX.routes.count)throw new Error("現在の条件では、あわせて生産を維持した24時間の日次候補を作れません。");
+
+  // Baseline is the best schedule inside the SAME mandatory universe, with no material caps.
+  const baseline=pamamaWeeklySearch(null);
+  if(!baseline){
+    throw new Error("現在の条件では、ねこみみさんのおねがい／作りたい島産品をすべて満たす5日分の候補が見つかりません。");
+  }
+  const floor=baseline.value*retention;
+
+  let chosen=null,chosenLimits=null,relaxStep=0;
+  for(let step=0;step<=2;step++){
+    const limits=pamamaLimitArray(workshops,step);
+    const found=pamamaWeeklySearch(limits);
+    if(found && found.value+1e-9>=floor){
+      chosen=found;chosenLimits=limits;relaxStep=step;break;
     }
-    throw new Error(`現在の条件では、ねこみみさんのおねがいを絶対達成できる案が見つかりません。${details.length?"（"+details.join(" / ")+"）":""}`);
+    // Keep the last feasible candidate as a diagnostic fallback.
+    if(found){chosen=found;chosenLimits=limits;relaxStep=step;}
+  }
+  if(!chosen){
+    throw new Error("素材上限を2段階まで緩和しても、5日分のスケジュール候補を生成できません。");
   }
 
+  const days=chosen.days.map(pamamaRouteToSlots);
+  const usedCount=pamamaProducedFromDays(days);
   const favorNeeds=new Map();
-  for(const id of targets) favorNeeds.set(id,state.favor[id]||0);
-
-  const usedCount=new Map();
-  for(const [id,qty] of Object.entries(state.produced||{})) usedCount.set(+id,qty);
-
-  const totalSlots=state.days.reduce((sum,day)=>sum+day.length*workshops,0);
+  for(let i=0;i<targets.length;i++)favorNeeds.set(targets[i],Math.max(0,PAMAMA_CTX.favorNeeds[i]-(chosen.favorGot[i]||0)));
+  const totalSlots=days.reduce((s,d)=>s+d.length*workshops,0);
+  const effTransitions=days.reduce((s,d)=>s+d.filter(x=>x.eff).length,0);
 
   return{
-    days:state.days,
-    workshops,
-    targets,
-    favorNeeds,
-    usedCount,
-    estimatedValue:state.value,
-    effTransitions:state.effTransitions,
-    totalSlots,
-    groove:state.groove,
-    grooveCap:cap,
-    materials:state.materials||{},
-    materialPenalty:practicalBurden(state.materials||{},state.days||[]),
-    engineVersion:"C-day-v2",
-    valueRetention:valueRetention()
+    days,workshops,targets,favorNeeds,usedCount,
+    estimatedValue:chosen.value,baselineValue:baseline.value,
+    valueRatio:baseline.value?chosen.value/baseline.value:1,
+    retention,relaxStep,
+    effTransitions,totalSlots,groove:chosen.groove,grooveCap:cap,
+    materials:pamamaBuildMaterialsObject(chosen.mats),
+    materialLimits:pamamaBuildLimitsObject(chosenLimits),
+    pamamaRoutes:PAMAMA_CTX.routes.count,
+    pamamaDailyCaches:PAMAMA_CTX.dayCache.size,
+    materialPenalty:0
   };
 }
 
@@ -1086,6 +1331,7 @@ function recalculateManualSchedule(){
   }
   LAST.days=rebuilt;
   LAST.estimatedValue=value;
+  if(LAST.baselineValue) LAST.valueRatio=value/LAST.baselineValue;
   LAST.effTransitions=effTransitions;
   LAST.groove=groove;
   LAST.materials=materials;
@@ -1220,7 +1466,7 @@ function renderSummary(){
     <div class="summary-card coin-card">
       <div class="label">概算青船貨獲得数</div>
       <div class="value">${Math.round(LAST.estimatedValue*1.3).toLocaleString()}</div>
-      <div class="sub">青船貨（目安）・需要/人気度 1.3倍想定</div>
+      <div class="sub">青船貨（目安）・需要/人気度 1.3倍想定${LAST.baselineValue?`<br>素材制限なし比 ${(LAST.valueRatio*100).toFixed(2)}%（維持ライン ${Math.round(LAST.retention*100)}%）`:""}</div>
     </div>
     <div class="summary-card">
       <div class="label">あわせて生産回数</div>
@@ -1236,6 +1482,7 @@ function renderSummary(){
       <div class="label">ねこみみ達成状況</div>
       <div class="value summary-status-value">${status}</div>
       ${favorProgress?`<div class="sub">${favorProgress}</div>`:""}
+      ${LAST.materialLimits?`<div class="sub">素材上限：目安+5${LAST.relaxStep?` から ${LAST.relaxStep}段階緩和`:" で達成"}</div>`:""}
     </div>`;
 }
 function renderTabs(){
@@ -1253,12 +1500,12 @@ function renderMaterials(){
   $("#historyStatus").textContent=hc?`確定済み履歴：${hc}週`:"";
   $("#materialGrid").innerHTML=rows.map(([name,qty])=>{
     const t=materialType(name);
-    const limit=comfortLimit(name);
-    const cls=qty>limit+10?"very-heavy":qty>limit+5?"heavy":"";
+    const limit=LAST.materialLimits?.[name] ?? pamamaBaseLimit(name,LAST.workshops||1);
+    const cls=qty>limit?"very-heavy":qty===limit?"heavy":"";
     let hint=t==="granary"?"グラナリー":t==="animal"?"飼育":t==="crop"?"作物":"採集";
     return `<div class="material-card ${cls}">
       <span class="mname">${t==="granary"?"⚠ ":""}${name} <span class="pill">${hint}</span></span>
-      <span class="mqty">×${qty}</span>
+      <span class="mqty">×${qty} <span class="small">/ 上限${limit}</span></span>
     </div>`;
   }).join("");
 }
@@ -1302,7 +1549,7 @@ $("#favorOff").addEventListener("change",()=>{
   $("#favors").classList.remove("on");save()
 });
 ["#favor4","#favor6","#favor8"].forEach(s=>$(s).addEventListener("change",save));
-$("#valueRetention").addEventListener("change",save);
+if($("#retentionSelect")) $("#retentionSelect").addEventListener("change",save);
 ["#capGather","#capCrop","#capAnimal","#capGranary"].forEach(sel=>$(sel).addEventListener("change",save));
 $("#filter").oninput=renderExclude;
 $("#wantedFilter").oninput=renderWanted;
@@ -1396,7 +1643,7 @@ $("#saveBtn").onclick=()=>{save();alert("設定を保存しました。")};
 $("#reset").onclick=()=>{
   localStorage.removeItem(STORAGE_KEY);excludedMaterials.clear();wantedItems.clear();
   $("#rank").value=5;$("#workshops").value=3;$("#landmarks").value=2;
-  $("#favorOff").checked=true;$("#favorOn").checked=false;$("#favors").classList.remove("on");$("#valueRetention").value="0.96";$("#capGather").value=25;$("#capCrop").value=20;$("#capAnimal").value=16;$("#capGranary").value=12;
+  $("#favorOff").checked=true;$("#favorOn").checked=false;$("#favors").classList.remove("on");$("#searchModeSelect").value="standard";if($("#retentionSelect"))$("#retentionSelect").value="0.96";$("#capGather").value=25;$("#capCrop").value=20;$("#capAnimal").value=16;$("#capGranary").value=12;
   fillFavorSelects();renderExclude();updateExcludeSummary();
   $("#summary").innerHTML=`
     <div class="summary-card"><div class="label">工房の数</div><div class="value">-</div></div>
