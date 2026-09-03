@@ -737,7 +737,7 @@ details:not([open])>summary.panel-title::after{
 }
 
 
-/* v1.5.3 material policy: compact toolbar + segmented view */
+/* v1.5.4 material policy: compact toolbar + segmented view */
 .material-policy-help{
   margin-bottom:7px;
   color:#575248;

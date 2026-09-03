@@ -11,7 +11,7 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v1.5.3</span>
+      <span class="ver">v1.5.4</span>
     </div>
 
   </div>
@@ -115,14 +115,14 @@
             </div>
           </div>
 
-          <div class="search-settings-help" style="margin-top:16px;padding-top:13px;border-top:1px solid #ded9cb">
-            <div style="font-size:12px;font-weight:800;color:#565044;margin-bottom:7px">設定について</div>
-            <div class="small" style="line-height:1.7">
+          <details class="search-settings-help" style="margin-top:16px;padding-top:13px;border-top:1px solid #ded9cb">
+            <summary style="cursor:pointer;font-size:12px;font-weight:800;color:#565044;user-select:none">設定について</summary>
+            <div class="small" style="line-height:1.7;margin-top:9px">
               <b>価値の優先度：</b>最高価値のスケジュールと比べて、どこまで価値低下を許容するかを指定します。数値を下げるほど素材上限を維持しやすく、数値を上げるほど青船貨価値を優先します。例：94%なら最大6%の価値低下を許容して素材負担を抑えます。<br>
               <b>素材上限の扱い：</b>「自動緩和」は基本上限で価値の優先度を満たせない時だけ、工房数ぶんずつ最大2段階まで緩和します。「上限を厳守」は基本上限を1個でも超える候補を採用しません。<br>
               <b>素材使用の目安：</b>設定した数値を目安に、素材の使用量が偏りすぎないよう調整します。「自動緩和」では、条件を満たせない場合のみ素材使用量の許容範囲を少し広げます。「上限を厳守」では、許容範囲を広げずに生成します。<br><b>素材の節約・除外・履歴：</b>「少なめ」は使用目安のおよそ半分を目標にしますが、上限ではありません。また、先週の確定履歴がある場合は先週＋今週の2週間合計が偏りすぎない案を優先します。どちらも、その上限条件で得られた最高価値から2%以内の候補だけで比較するため、素材を避けるために価値を大きく落とすことはありません。
             </div>
-          </div>
+          </details>
 
           </div>
         </details>
