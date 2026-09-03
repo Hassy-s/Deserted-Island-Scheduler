@@ -1590,7 +1590,7 @@ function retentionDisplayLabel(v){
 function renderSummary(){
   const unmet=[...LAST.favorNeeds.entries()].filter(([_,n])=>n>0);
   let favorProgress="";
-  if(favorEnabled()){
+  if(favorEnabled() && unmet.length){
     favorProgress = LAST.targets.map(id=>{
       const item=ITEMS.find(i=>i.id===id);
       const need=item.time===6?6:8;
@@ -1611,9 +1611,9 @@ function renderSummary(){
       <div class="value">${LAST.workshops}棟</div>
     </div>
     <div class="summary-card coin-card">
-      <div class="label">概算青船貨獲得数</div>
+      <div class="label">概算獲得数</div>
       <div class="value">${Math.round(LAST.estimatedValue*1.3).toLocaleString()}</div>
-      <div class="sub">青船貨（目安）・需要/人気度 1.3倍想定${LAST.baselineValue?`<br>素材制限なし比 ${(LAST.valueRatio*100).toFixed(2)}%<br>価値の優先度：${retentionDisplayLabel(LAST.retention)}`:""}</div>
+      <div class="sub">※需要・人気度は平均1.3倍を想定</div>
     </div>
     <div class="summary-card">
       <div class="label">あわせて生産回数</div>
@@ -1629,7 +1629,6 @@ function renderSummary(){
       <div class="label">ねこみみ達成状況</div>
       <div class="value summary-status-value">${status}</div>
       ${favorProgress?`<div class="sub">${favorProgress}</div>`:""}
-      ${LAST.materialLimits?`<div class="sub">素材上限：${LAST.capPolicy==="strict"?"厳守（目安+5）":`自動緩和（目安+5${LAST.relaxStep?` → ${LAST.relaxStep}段階緩和`:"で達成"}）`}</div>`:""}
     </div>`;
 }
 function renderTabs(){
@@ -1801,7 +1800,7 @@ $("#reset").onclick=()=>{
   fillFavorSelects();renderExclude();updateExcludeSummary();
   $("#summary").innerHTML=`
     <div class="summary-card"><div class="label">工房の数</div><div class="value">-</div></div>
-    <div class="summary-card coin-card"><div class="label">概算青船貨獲得数</div><div class="value">-</div><div class="sub">青船貨（目安）</div></div>
+    <div class="summary-card coin-card"><div class="label">概算獲得数</div><div class="value">-</div><div class="sub">※需要・人気度は平均1.3倍を想定</div></div>
     <div class="summary-card"><div class="label">あわせて生産回数</div><div class="value">-</div></div>
     <div class="summary-card"><div class="label">やる気</div><div class="value">-</div></div>
     <div class="summary-card status"><div class="label">ねこみみ達成状況</div><div class="value">未生成</div></div>`;

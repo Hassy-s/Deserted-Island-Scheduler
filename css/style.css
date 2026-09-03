@@ -860,3 +860,34 @@ details:not([open])>summary.panel-title::after{
   .materialcheck .pill,
   .material-policy-header .type-head{display:none}
 }
+
+
+/* v1.5.5 compact result cards */
+.summary{
+  gap:8px!important;
+  padding:8px!important;
+}
+.summary-card{
+  min-height:72px!important;
+  padding:8px 8px!important;
+}
+.summary-card .label{
+  font-size:11.5px!important;
+}
+.summary-card .value{
+  margin-top:4px!important;
+  font-size:23px!important;
+  line-height:1.15!important;
+}
+.summary-card.coin-card .value{
+  font-size:28px!important;
+}
+.summary-card .sub{
+  margin-top:2px!important;
+  font-size:10px!important;
+  line-height:1.25!important;
+}
+.summary-status-value{
+  font-size:17px!important;
+  line-height:1.2!important;
+}
