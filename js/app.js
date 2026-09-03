@@ -1389,12 +1389,18 @@ function chooseSchedule(){
   if(!chosen){
     if(capPolicy==="strict"){
       if(bestUnderCap){
-        const pct=baseline.value?bestUnderCap.found.value/baseline.value*100:0;
-        throw new Error(`素材上限は守れますが、価値の優先度 ${Math.round(retention*100)}% に届きません（この上限で ${pct.toFixed(2)}%）。「自動緩和」にすると上限を少し広げて再探索できます。`);
+        // Strict mode prioritizes the exact material ceiling.
+        // If the requested value ratio cannot be reached, show the
+        // highest-value schedule that still satisfies that ceiling.
+        chosen=bestUnderCap.found;
+        chosenLimits=bestUnderCap.limits;
+        relaxStep=bestUnderCap.step;
+      }else{
+        throw new Error("「上限を厳守」の条件では、必須条件を満たす5日分のスケジュールを生成できません。素材使用の目安・除外素材・必須条件を見直してください。");
       }
-      throw new Error("「上限を厳守」の条件では、必須条件を満たす5日分のスケジュールを生成できません。素材使用の目安・除外素材・必須条件を見直してください。");
+    }else{
+      throw new Error(`素材上限を2段階まで自動緩和しても、価値の優先度 ${Math.round(retention*100)}% を満たす5日分のスケジュールを生成できません。`);
     }
-    throw new Error(`素材上限を2段階まで自動緩和しても、価値の優先度 ${Math.round(retention*100)}% を満たす5日分のスケジュールを生成できません。`);
   }
 
   const days=chosen.days.map(solverRouteToSlots);
@@ -1634,6 +1640,19 @@ function renderSummary(){
       <div class="value summary-status-value">${status}</div>
       ${favorProgress?`<div class="sub">${favorProgress}</div>`:""}
     </div>`;
+
+  const valueWarning=$("#valuePriorityWarning");
+  const belowValueTarget=LAST.capPolicy==="strict" && LAST.valueRatio+1e-9<LAST.retention;
+  if(valueWarning){
+    if(belowValueTarget){
+      const actualPct=(LAST.valueRatio*100).toFixed(2);
+      valueWarning.textContent=`⚠ 上限厳守モードのため、価値優先度設定条件を満たしていません。代わりに、条件内で最良の価値${actualPct}%のスケジュールを表示しています。`;
+      valueWarning.hidden=false;
+    }else{
+      valueWarning.hidden=true;
+      valueWarning.textContent="";
+    }
+  }
 }
 function renderTabs(){
   $("#tabs").style.display="grid";
@@ -1663,7 +1682,7 @@ function renderMaterials(){
 function render(){
   try{LAST=chooseSchedule();EDIT_UNDO=[];EDIT_REDO=[];updateEditButtons();closeReplacePopover()}
   catch(e){
-    $("#scheduleBody").innerHTML=`<tr><td colspan="7" style="text-align:center;color:#b94d4d;padding:30px">${e.message}</td></tr>`;
+    $("#scheduleBody").innerHTML=`<tr><td colspan="8" style="text-align:center;color:#b94d4d;padding:30px">${e.message}</td></tr>`;
     return
   }
   renderSummary();
@@ -1808,10 +1827,12 @@ $("#reset").onclick=()=>{
     <div class="summary-card"><div class="label">あわせて生産回数</div><div class="value">-</div></div>
     <div class="summary-card"><div class="label">やる気</div><div class="value">-</div></div>
     <div class="summary-card status"><div class="label">ねこみみ達成状況</div><div class="value">未生成</div></div>`;
-  $("#scheduleBody").innerHTML=`<tr><td colspan="7" style="text-align:center;color:#777;padding:30px">条件を設定して「スケジュールを生成」を押してください。</td></tr>`;
+  $("#scheduleBody").innerHTML=`<tr><td colspan="8" style="text-align:center;color:#777;padding:30px">条件を設定して「スケジュールを生成」を押してください。</td></tr>`;
   $("#tabs").style.display="none";
   $("#materialPanel").style.display="none";
   $("#generateStatus").textContent="";
+  const valueWarning=$("#valuePriorityWarning");
+  if(valueWarning){valueWarning.hidden=true;valueWarning.textContent="";}
   LAST=null;EDIT_UNDO=[];EDIT_REDO=[];updateEditButtons();closeReplacePopover()
 };
 load();

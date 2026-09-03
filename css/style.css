@@ -891,3 +891,20 @@ details:not([open])>summary.panel-title::after{
   font-size:17px!important;
   line-height:1.2!important;
 }
+
+
+/* v1.5.9 strict-mode value fallback notice
+   [hidden] removes the element from layout completely, so normal results stay compact. */
+.value-priority-warning[hidden]{
+  display:none!important;
+}
+.value-priority-warning{
+  margin:0 8px 8px;
+  padding:7px 10px;
+  border:1px solid #d9bf72;
+  border-radius:4px;
+  background:#fff8df;
+  color:#6b5520;
+  font-size:12px;
+  line-height:1.45;
+}
