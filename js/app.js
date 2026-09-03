@@ -1530,7 +1530,7 @@ function renderReplacementCandidates(){
   $("#replaceCandidates").innerHTML=shown.length?shown.map(({item,fit})=>{
     const cls=fit.rank===3?"both":fit.rank===2?"before":fit.rank===1?"after":"none";
     const mark=fit.rank===3?"◎":fit.rank===2?"○":fit.rank===1?"△":"×";
-    const text=fit.rank===3?"前後一致":fit.rank===2?"手前一致":fit.rank===1?"後ろ一致":"一致なし";
+    const text=fit.rank===3?"前後一致":fit.rank===2?"手前一致":fit.rank===1?"後方一致":"一致しない";
     return `<button class="replace-candidate" data-id="${item.id}">
       <span class="replace-fit ${cls}" title="${text}">${mark}</span>
       <span>

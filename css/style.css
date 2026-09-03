@@ -904,7 +904,7 @@ details:not([open])>summary.panel-title::after{
   border:1px solid #d9bf72;
   border-radius:4px;
   background:#fff8df;
-  color:#6b5520;
+  color:#b14a32;
   font-size:12px;
   line-height:1.45;
 }
