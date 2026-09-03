@@ -11,7 +11,7 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v1.4.0-beam-test</span>
+      <span class="ver">v1.4.0</span>
     </div>
 
   </div>
@@ -77,16 +77,22 @@
           <div class="panel-body">
           <input id="searchModeSelect" type="hidden" value="standard">
           <div class="form-row">
-            <label>価値維持ライン</label>
+            <label>価値の優先度</label>
             <select id="retentionSelect">
-              <option value="0.95">95%（素材分散寄り）</option>
-              <option value="0.96" selected>96%（おすすめ）</option>
-              <option value="0.97">97%（価値寄り）</option>
-              <option value="0.98">98%（価値重視）</option>
-              <option value="0.99">99%（かなり価値重視）</option>
-              <option value="1">100%（最高価値優先）</option>
+              <option value="0.96" selected>バランス重視（96%）</option>
+              <option value="0.97">やや価値重視（97%）</option>
+              <option value="0.98">価値重視（98%）</option>
+              <option value="0.99">かなり価値重視（99%）</option>
+              <option value="1">最高価値優先（100%）</option>
             </select>
-            <div class="small" style="margin-top:5px">必須条件を満たした素材制限なしの最高価値に対して、何%以上を維持するか指定します。</div>
+          </div>
+
+          <div class="form-row" style="margin-top:12px">
+            <label>素材上限の扱い</label>
+            <div class="toggle-row" style="justify-content:flex-start;gap:18px;flex-wrap:wrap">
+              <label><input type="radio" name="capPolicy" value="auto" checked> 自動緩和（おすすめ）</label>
+              <label><input type="radio" name="capPolicy" value="strict"> 上限を厳守</label>
+            </div>
           </div>
 
           <div id="searchDetails" style="margin-top:12px">
@@ -97,7 +103,15 @@
               <label for="capAnimal">飼育動物素材</label><input id="capAnimal" type="number" min="4" max="99" value="16">
               <label for="capGranary">グラナリー素材</label><input id="capGranary" type="number" min="4" max="99" value="12">
             </div>
-            <div class="small" style="margin-top:7px">まず「目安＋5」以内をハード上限として探索します（工房数の刻みに合わせて切り下げ）。価値維持ラインに届かない場合だけ、工房数ぶんずつ最大2段階まで自動で緩和します。例：作物20・4工房 → 24 → 28 → 32。</div>
+          </div>
+
+          <div class="search-settings-help" style="margin-top:16px;padding-top:13px;border-top:1px solid #ded9cb">
+            <div style="font-size:12px;font-weight:800;color:#565044;margin-bottom:7px">設定について</div>
+            <div class="small" style="line-height:1.7">
+              <b>価値の優先度：</b>最高価値のスケジュールと比べて、どこまで価値低下を許容するかを指定します。96%なら最大4%下がっても素材の使いやすさを優先します。<br>
+              <b>素材上限の扱い：</b>「自動緩和」は基本上限で価値の優先度を満たせない時だけ、工房数ぶんずつ最大2段階まで緩和します。「上限を厳守」は基本上限を1個でも超える候補を採用しません。<br>
+              <b>素材使用の目安：</b>基本上限は「目安＋5」以内を工房数の刻みに合わせて切り下げます。例：作物20・4工房なら基本上限24。自動緩和時のみ必要に応じて 24 → 28 → 32 と広げます。
+            </div>
           </div>
 
           </div>
@@ -206,7 +220,7 @@
           <li>各日について、24時間ぴったり・毎回あわせて生産・同じ島産品を1日に重複させない候補を価値順にランキングします。</li>
           <li>週5日を組み合わせるBeam探索では、週間素材数を正確に数え、実効上限を超えた候補をその場で除外します。</li>
           <li>ねこみみさんのおねがいと「作りたい島産品」は、どちらも必須条件として生成します。</li>
-          <li>素材上限内で価値維持ラインを満たせない時だけ、上限を工房数ぶんずつ最大2段階まで自動緩和します。</li>
+          <li>「自動緩和」では基本上限で価値の優先度を満たせない時だけ最大2段階まで緩和し、「上限を厳守」では基本上限を固定します。</li>
           <li>確定済みの直近数週間の素材履歴は、価値がほぼ同じ候補の軽いタイブレークとして使います。</li>
         </ul>
       </div>

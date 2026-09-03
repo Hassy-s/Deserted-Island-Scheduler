@@ -127,6 +127,7 @@ function save(){
     favor:favorEnabled(),
     searchMode:"standard",
     retention:+$("#retentionSelect").value,
+    capPolicy:document.querySelector('input[name="capPolicy"]:checked')?.value||"auto",
     capGather:+$("#capGather").value,
     capCrop:+$("#capCrop").value,
     capAnimal:+$("#capAnimal").value,
@@ -156,7 +157,13 @@ function load(){
     $("#favor6").value="";
     $("#favor8").value="";
     $("#searchModeSelect").value="standard";
-    if(s.retention!==undefined && $("#retentionSelect")) $("#retentionSelect").value=String(s.retention);
+    if(s.retention!==undefined && $("#retentionSelect")){
+      const rv=String(s.retention);
+      $("#retentionSelect").value=[...$("#retentionSelect").options].some(o=>o.value===rv)?rv:"0.96";
+    }
+    const capPolicy=s.capPolicy==="strict"?"strict":"auto";
+    const capRadio=document.querySelector(`input[name="capPolicy"][value="${capPolicy}"]`);
+    if(capRadio)capRadio.checked=true;
     if(s.capGather!==undefined)$("#capGather").value=s.capGather;
     if(s.capCrop!==undefined)$("#capCrop").value=s.capCrop;
     if(s.capAnimal!==undefined)$("#capAnimal").value=s.capAnimal;
@@ -871,7 +878,7 @@ function preserveEarlyWeekDiversity(weeks, dayIndex, cap){
 }
 
 
-// v1.4.0-beam-test ---------------------------------------------------------
+// v1.4.0 ---------------------------------------------------------
 // Pamama-style daily ranking + exact weekly material-cap Beam search.
 // No material-price / penalty tuning is used for the generation decision.
 const PAMAMA_K_PER_LEN=80;
@@ -1211,7 +1218,8 @@ function chooseSchedule(){
   const avail=available();
   if(!avail.length)throw new Error("使用可能な島産品がありません。");
   const workshops=+$("#workshops").value,cap=grooveCap();
-  const retention=Math.max(0.95,Math.min(1,+($("#retentionSelect")?.value||0.96)));
+  const retention=Math.max(0.96,Math.min(1,+($("#retentionSelect")?.value||0.96)));
+  const capPolicy=document.querySelector('input[name="capPolicy"]:checked')?.value||"auto";
 
   const targets=[];
   if(favorEnabled()){
@@ -1247,17 +1255,27 @@ function chooseSchedule(){
   const floor=baseline.value*retention;
 
   let chosen=null,chosenLimits=null,relaxStep=0;
-  for(let step=0;step<=2;step++){
+  let bestUnderCap=null;
+  const maxRelaxStep=capPolicy==="strict"?0:2;
+  for(let step=0;step<=maxRelaxStep;step++){
     const limits=pamamaLimitArray(workshops,step);
     const found=pamamaWeeklySearch(limits);
-    if(found && found.value+1e-9>=floor){
-      chosen=found;chosenLimits=limits;relaxStep=step;break;
+    if(found){
+      bestUnderCap={found,limits,step};
+      if(found.value+1e-9>=floor){
+        chosen=found;chosenLimits=limits;relaxStep=step;break;
+      }
     }
-    // Keep the last feasible candidate as a diagnostic fallback.
-    if(found){chosen=found;chosenLimits=limits;relaxStep=step;}
   }
   if(!chosen){
-    throw new Error("素材上限を2段階まで緩和しても、5日分のスケジュール候補を生成できません。");
+    if(capPolicy==="strict"){
+      if(bestUnderCap){
+        const pct=baseline.value?bestUnderCap.found.value/baseline.value*100:0;
+        throw new Error(`素材上限は守れますが、価値の優先度 ${Math.round(retention*100)}% に届きません（この上限で ${pct.toFixed(2)}%）。「自動緩和」にすると上限を少し広げて再探索できます。`);
+      }
+      throw new Error("「上限を厳守」の条件では、必須条件を満たす5日分のスケジュールを生成できません。素材使用の目安・除外素材・必須条件を見直してください。");
+    }
+    throw new Error(`素材上限を2段階まで自動緩和しても、価値の優先度 ${Math.round(retention*100)}% を満たす5日分のスケジュールを生成できません。`);
   }
 
   const days=chosen.days.map(pamamaRouteToSlots);
@@ -1271,7 +1289,7 @@ function chooseSchedule(){
     days,workshops,targets,favorNeeds,usedCount,
     estimatedValue:chosen.value,baselineValue:baseline.value,
     valueRatio:baseline.value?chosen.value/baseline.value:1,
-    retention,relaxStep,
+    retention,relaxStep,capPolicy,
     effTransitions,totalSlots,groove:chosen.groove,grooveCap:cap,
     materials:pamamaBuildMaterialsObject(chosen.mats),
     materialLimits:pamamaBuildLimitsObject(chosenLimits),
@@ -1440,6 +1458,14 @@ function renderDay(idx){
   $("#scheduleBody").querySelectorAll("tr.replaceable-row").forEach(row=>row.onclick=()=>openReplacement(idx,+row.dataset.slot,row));
   $("#tabs").querySelectorAll("button").forEach((b,i)=>b.classList.toggle("active",i===idx))
 }
+function retentionDisplayLabel(v){
+  const pct=Math.round((+v||0.96)*100);
+  if(pct>=100)return "最高価値優先（100%）";
+  if(pct===99)return "かなり価値重視（99%）";
+  if(pct===98)return "価値重視（98%）";
+  if(pct===97)return "やや価値重視（97%）";
+  return "バランス重視（96%）";
+}
 function renderSummary(){
   const unmet=[...LAST.favorNeeds.entries()].filter(([_,n])=>n>0);
   let favorProgress="";
@@ -1466,7 +1492,7 @@ function renderSummary(){
     <div class="summary-card coin-card">
       <div class="label">概算青船貨獲得数</div>
       <div class="value">${Math.round(LAST.estimatedValue*1.3).toLocaleString()}</div>
-      <div class="sub">青船貨（目安）・需要/人気度 1.3倍想定${LAST.baselineValue?`<br>素材制限なし比 ${(LAST.valueRatio*100).toFixed(2)}%（維持ライン ${Math.round(LAST.retention*100)}%）`:""}</div>
+      <div class="sub">青船貨（目安）・需要/人気度 1.3倍想定${LAST.baselineValue?`<br>素材制限なし比 ${(LAST.valueRatio*100).toFixed(2)}%<br>価値の優先度：${retentionDisplayLabel(LAST.retention)}`:""}</div>
     </div>
     <div class="summary-card">
       <div class="label">あわせて生産回数</div>
@@ -1482,7 +1508,7 @@ function renderSummary(){
       <div class="label">ねこみみ達成状況</div>
       <div class="value summary-status-value">${status}</div>
       ${favorProgress?`<div class="sub">${favorProgress}</div>`:""}
-      ${LAST.materialLimits?`<div class="sub">素材上限：目安+5${LAST.relaxStep?` から ${LAST.relaxStep}段階緩和`:" で達成"}</div>`:""}
+      ${LAST.materialLimits?`<div class="sub">素材上限：${LAST.capPolicy==="strict"?"厳守（目安+5）":`自動緩和（目安+5${LAST.relaxStep?` → ${LAST.relaxStep}段階緩和`:"で達成"}）`}</div>`:""}
     </div>`;
 }
 function renderTabs(){
@@ -1550,6 +1576,7 @@ $("#favorOff").addEventListener("change",()=>{
 });
 ["#favor4","#favor6","#favor8"].forEach(s=>$(s).addEventListener("change",save));
 if($("#retentionSelect")) $("#retentionSelect").addEventListener("change",save);
+document.querySelectorAll('input[name="capPolicy"]').forEach(r=>r.addEventListener("change",save));
 ["#capGather","#capCrop","#capAnimal","#capGranary"].forEach(sel=>$(sel).addEventListener("change",save));
 $("#filter").oninput=renderExclude;
 $("#wantedFilter").oninput=renderWanted;
@@ -1643,7 +1670,7 @@ $("#saveBtn").onclick=()=>{save();alert("設定を保存しました。")};
 $("#reset").onclick=()=>{
   localStorage.removeItem(STORAGE_KEY);excludedMaterials.clear();wantedItems.clear();
   $("#rank").value=5;$("#workshops").value=3;$("#landmarks").value=2;
-  $("#favorOff").checked=true;$("#favorOn").checked=false;$("#favors").classList.remove("on");$("#searchModeSelect").value="standard";if($("#retentionSelect"))$("#retentionSelect").value="0.96";$("#capGather").value=25;$("#capCrop").value=20;$("#capAnimal").value=16;$("#capGranary").value=12;
+  $("#favorOff").checked=true;$("#favorOn").checked=false;$("#favors").classList.remove("on");$("#searchModeSelect").value="standard";if($("#retentionSelect"))$("#retentionSelect").value="0.96";const autoCapPolicy=document.querySelector('input[name="capPolicy"][value="auto"]');if(autoCapPolicy)autoCapPolicy.checked=true;$("#capGather").value=25;$("#capCrop").value=20;$("#capAnimal").value=16;$("#capGranary").value=12;
   fillFavorSelects();renderExclude();updateExcludeSummary();
   $("#summary").innerHTML=`
     <div class="summary-card"><div class="label">工房の数</div><div class="value">-</div></div>
