@@ -1207,14 +1207,18 @@ function solverWeeklySearch(limits){
   feasible.sort((a,b)=>b.value-a.value);
   return {best:feasible[0],feasible};
 }
-function solverBaseLimit(name,workshops){
+function solverBaseLimit(name,capPolicy){
   const target=standardSoftCap(name);
-  const desired=target+5;
-  return Math.max(workshops,Math.floor(desired/workshops)*workshops);
+  // Keep the user-entered ceiling as-is.
+  // Strict: exact input value.
+  // Auto: input value + small allowance.
+  return capPolicy==="strict" ? target : target+5;
 }
-function solverLimitArray(workshops,relaxStep){
+function solverLimitArray(workshops,relaxStep,capPolicy){
   const arr=new Uint16Array(SOLVER_MATERIAL_NAMES.length);
-  for(let i=0;i<arr.length;i++)arr[i]=solverBaseLimit(SOLVER_MATERIAL_NAMES[i],workshops)+relaxStep*workshops;
+  for(let i=0;i<arr.length;i++){
+    arr[i]=solverBaseLimit(SOLVER_MATERIAL_NAMES[i],capPolicy)+relaxStep*workshops;
+  }
   return arr;
 }
 function solverRouteToSlots(cand){
@@ -1371,7 +1375,7 @@ function chooseSchedule(){
   let bestUnderCap=null;
   const maxRelaxStep=capPolicy==="strict"?0:2;
   for(let step=0;step<=maxRelaxStep;step++){
-    const limits=solverLimitArray(workshops,step);
+    const limits=solverLimitArray(workshops,step,capPolicy);
     const search=solverWeeklySearch(limits);
     if(search){
       const found=search.best;
