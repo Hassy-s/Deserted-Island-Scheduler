@@ -737,39 +737,71 @@ details:not([open])>summary.panel-title::after{
 }
 
 
-/* v1.5.2 material policy: exception-only checkboxes */
+/* v1.5.3 material policy: compact toolbar + segmented view */
 .material-policy-help{
-  margin-bottom:9px;
+  margin-bottom:7px;
   color:#575248;
-  line-height:1.65;
+  line-height:1.5;
 }
-.material-toolbar{align-items:center}
+.material-toolbar{
+  align-items:center;
+  gap:8px;
+  margin-bottom:7px;
+}
+.material-bulk-actions{
+  flex:0 0 auto;
+  gap:5px;
+}
+.material-bulk-actions button{
+  padding:5px 8px;
+  font-size:12px;
+}
 .material-view-controls{
   display:flex;
   align-items:center;
   justify-content:flex-end;
-  gap:3px;
+  gap:5px;
   margin-left:auto;
+  min-width:0;
   white-space:nowrap;
-  font-size:12px;
+  font-size:11px;
   color:#625d53;
 }
-.material-view-label{font-weight:800;margin-right:2px}
-.material-view-sep{color:#b0a999}
+.material-view-label{
+  flex:0 0 auto;
+  font-weight:800;
+}
+.material-view-segmented{
+  display:inline-flex;
+  align-items:stretch;
+  overflow:hidden;
+  border:1px solid #bdb6a6;
+  border-radius:6px;
+  background:#f7f4ec;
+}
 .material-view-btn{
   width:auto!important;
   min-width:0;
-  padding:3px 5px!important;
+  margin:0!important;
+  padding:5px 8px!important;
   border:0!important;
-  background:transparent!important;
+  border-left:1px solid #cbc4b5!important;
+  border-radius:0!important;
+  background:#f7f4ec!important;
   box-shadow:none!important;
-  color:#6d675d!important;
-  font-size:12px!important;
-  font-weight:700!important;
+  color:#625d53!important;
+  font-size:11px!important;
+  font-weight:800!important;
+  line-height:1.15!important;
   cursor:pointer;
 }
-.material-view-btn:hover{color:#292720!important;text-decoration:underline}
-.material-view-btn.active{color:#2e2b24!important;font-weight:900!important;text-decoration:underline}
+.material-view-btn:first-child{border-left:0!important}
+.material-view-btn:hover{background:#eee9dc!important;color:#292720!important;filter:none}
+.material-view-btn.active{
+  background:linear-gradient(#77732d,#666228)!important;
+  color:#fff!important;
+  font-weight:900!important;
+}
 .material-policy-box{
   height:220px;
   overflow:auto;
@@ -818,9 +850,9 @@ details:not([open])>summary.panel-title::after{
   background:#fff8e9;
   color:#7a552e;
 }
-@media(max-width:760px){
+@media(max-width:560px){
   .material-toolbar{align-items:flex-start;flex-direction:column}
-  .material-view-controls{margin-left:0;justify-content:flex-start;flex-wrap:wrap}
+  .material-view-controls{margin-left:0;justify-content:flex-start}
 }
 @media(max-width:600px){
   .material-policy-header,

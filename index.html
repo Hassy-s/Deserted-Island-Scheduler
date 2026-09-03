@@ -11,7 +11,7 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v1.5.2</span>
+      <span class="ver">v1.5.3</span>
     </div>
 
   </div>
@@ -58,17 +58,17 @@
         <div class="panel-body">
           <div class="small material-policy-help">在庫が少ない素材は「少なめ」、使いたくない素材は「除外」にチェックします。何もチェックしていない素材は通常どおり使用します。「少なめ」と「除外」は同時には選べません。</div>
           <div class="exclude-head exclude-head-compact material-toolbar">
-            <div class="exclude-actions">
+            <div class="exclude-actions material-bulk-actions">
               <button class="secondary" id="allOn">すべて除外</button>
-              <button class="secondary" id="allOff">除外をすべて解除</button>
+              <button class="secondary" id="allOff" title="除外に設定した素材をすべて通常に戻します">除外を解除</button>
             </div>
             <div class="material-view-controls" aria-label="素材一覧の表示設定">
-              <span class="material-view-label">表示：</span>
-              <button type="button" class="material-view-btn active" data-material-view="all" aria-pressed="true">すべて</button>
-              <span class="material-view-sep">｜</span>
-              <button type="button" class="material-view-btn" data-material-view="low" aria-pressed="false">少なめのみ</button>
-              <span class="material-view-sep">｜</span>
-              <button type="button" class="material-view-btn" data-material-view="exclude" aria-pressed="false">除外のみ</button>
+              <span class="material-view-label">表示</span>
+              <div class="material-view-segmented" role="group" aria-label="素材一覧の絞り込み">
+                <button type="button" class="material-view-btn active" data-material-view="all" aria-pressed="true">すべて</button>
+                <button type="button" class="material-view-btn" data-material-view="low" aria-pressed="false">少なめ</button>
+                <button type="button" class="material-view-btn" data-material-view="exclude" aria-pressed="false">除外</button>
+              </div>
             </div>
           </div>
           <input id="filter" type="text" placeholder="素材名を検索">
