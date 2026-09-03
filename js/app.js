@@ -1612,8 +1612,8 @@ function renderSummary(){
     </div>
     <div class="summary-card coin-card">
       <div class="label">概算獲得数</div>
-      <div class="value">${Math.round(LAST.estimatedValue*1.3).toLocaleString()}</div>
-      <div class="sub">※需要・人気度は平均1.3倍を想定</div>
+      <div class="value">${Math.round(LAST.estimatedValue).toLocaleString()}</div>
+      <div class="sub">※実際の獲得数は需要・人気度によって変動します</div>
     </div>
     <div class="summary-card">
       <div class="label">あわせて生産回数</div>
@@ -1800,7 +1800,7 @@ $("#reset").onclick=()=>{
   fillFavorSelects();renderExclude();updateExcludeSummary();
   $("#summary").innerHTML=`
     <div class="summary-card"><div class="label">工房の数</div><div class="value">-</div></div>
-    <div class="summary-card coin-card"><div class="label">概算獲得数</div><div class="value">-</div><div class="sub">※需要・人気度は平均1.3倍を想定</div></div>
+    <div class="summary-card coin-card"><div class="label">概算獲得数</div><div class="value">-</div><div class="sub">※実際の獲得数は需要・人気度によって変動します</div></div>
     <div class="summary-card"><div class="label">あわせて生産回数</div><div class="value">-</div></div>
     <div class="summary-card"><div class="label">やる気</div><div class="value">-</div></div>
     <div class="summary-card status"><div class="label">ねこみみ達成状況</div><div class="value">未生成</div></div>`;
