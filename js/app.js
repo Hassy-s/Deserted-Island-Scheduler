@@ -43,7 +43,7 @@ function historyMaterialPenalty(item,workshops){
   return p;
 }
 
-let excludedMaterials=new Set(), wantedItems=new Set(), LAST=null, activeDay=0;
+let excludedMaterials=new Set(), lowMaterials=new Set(), wantedItems=new Set(), LAST=null, activeDay=0;
 let EDIT_UNDO=[], EDIT_REDO=[];
 let REPLACE_CTX=null, REPLACE_SHOW_ALL=false;
 const HISTORY_REDO_KEY="island_workshop_scheduler_history_redo_v1";
@@ -123,6 +123,7 @@ function save(){
     workshops:+$("#workshops").value,
     landmarks:+$("#landmarks").value,
     excludedMaterials:[...excludedMaterials],
+    lowMaterials:[...lowMaterials],
     wantedItems:[...wantedItems],
     favor:favorEnabled(),
     searchMode:"standard",
@@ -148,6 +149,8 @@ function load(){
     if(s.workshops)$("#workshops").value=s.workshops;
     if(s.landmarks)$("#landmarks").value=s.landmarks;
     excludedMaterials=new Set(s.excludedMaterials||[]);
+    lowMaterials=new Set(s.lowMaterials||[]);
+    for(const name of excludedMaterials) lowMaterials.delete(name);
     wantedItems=new Set((s.wantedItems||[]).map(Number));
     $("#favorOn").checked=!!s.favor;
     $("#favorOff").checked=!s.favor;
@@ -195,10 +198,20 @@ function allMaterials(){
 function materialTypeLabel(t){
   return t==="granary"?"グラナリー":t==="animal"?"飼育動物":t==="crop"?"作物":"採集";
 }
+function materialPolicy(name){
+  if(excludedMaterials.has(name))return "exclude";
+  if(lowMaterials.has(name))return "low";
+  return "normal";
+}
 function updateExcludeSummary(){
   const blocked=ITEMS.filter(itemUsesExcludedMaterial).length;
-  $("#excludeSummary").textContent=`除外素材：${excludedMaterials.size}件 / 対象外になる島産品：${blocked}品 / 現在使用可能：${available().length}品`;
-  const count=$("#excludeCount"); if(count) count.textContent=`${excludedMaterials.size}件除外`;
+  $("#excludeSummary").textContent=`少なめ：${lowMaterials.size}件 / 使わない：${excludedMaterials.size}件 / 対象外になる島産品：${blocked}品`;
+  const count=$("#excludeCount");
+  if(count){
+    count.textContent=lowMaterials.size||excludedMaterials.size
+      ? `少なめ ${lowMaterials.size} / 使わない ${excludedMaterials.size}`
+      : "すべて通常";
+  }
 }
 function renderExclude(){
   const q=$("#filter").value.trim(),grid=$("#itemGrid");
@@ -206,18 +219,25 @@ function renderExclude(){
   allMaterials()
     .filter(m=>!q||m.name.includes(q))
     .forEach(m=>{
-      const d=document.createElement("label");
+      const policy=materialPolicy(m.name);
+      const d=document.createElement("div");
       d.className="itemcheck materialcheck";
       d.innerHTML=`
-        <input type="checkbox" ${excludedMaterials.has(m.name)?"checked":""} data-name="${m.name}">
         <span class="iname">${m.name}</span>
-        <span class="pill">${materialTypeLabel(m.type)}</span>`;
+        <span class="pill">${materialTypeLabel(m.type)}</span>
+        <select class="material-policy-select policy-${policy}" data-name="${m.name}" aria-label="${m.name}の使用方針">
+          <option value="normal" ${policy==="normal"?"selected":""}>通常</option>
+          <option value="low" ${policy==="low"?"selected":""}>少なめ</option>
+          <option value="exclude" ${policy==="exclude"?"selected":""}>使わない</option>
+        </select>`;
       grid.appendChild(d)
     });
-  grid.querySelectorAll("input").forEach(cb=>cb.onchange=()=>{
-    const name=cb.dataset.name;
-    cb.checked?excludedMaterials.add(name):excludedMaterials.delete(name);
-    updateExcludeSummary();fillFavorSelects();
+  grid.querySelectorAll("select.material-policy-select").forEach(sel=>sel.onchange=()=>{
+    const name=sel.dataset.name,policy=sel.value;
+    excludedMaterials.delete(name);lowMaterials.delete(name);
+    if(policy==="exclude")excludedMaterials.add(name);
+    else if(policy==="low")lowMaterials.add(name);
+    renderExclude();updateExcludeSummary();fillFavorSelects();
     const visibleWanted=new Set(wantedAvailableItems().map(i=>i.id));
     wantedItems=new Set([...wantedItems].filter(id=>visibleWanted.has(id)));
     renderWanted();updateWantedSummary();save()
@@ -950,7 +970,7 @@ function solverPrepare(avail,workshops,cap,targets,wantedIds){
     wantedList,wantedBitByItemId,wantedAllMask,
     favorIds,favorNeeds,favorIndexByItemId,requiredGlobalIdx,
     routes:null,dayCache:new Map(),routeMatCache:new Map(),maskCountCache:new Map(),
-    history:ACTIVE_HISTORY_MATERIALS||{}
+    previousWeek:previousConfirmedMaterials()
   };
   solverEnumerateRoutes();
 }
@@ -1071,13 +1091,8 @@ function solverDailyCandidates(startGroove){
       value+=slotValue[p][C.routes.slots[off+p]];
     }
     const info=solverRouteRequirementInfo(routeId);
-    let histPenalty=0;
     const mats=solverRouteMaterials(routeId);
-    for(const [mi,q] of mats){
-      const name=SOLVER_MATERIAL_NAMES[mi];
-      histPenalty+=(C.history[name]||0)*q*0.42;
-    }
-    out.push({routeId,len,value,startGroove,endGroove:groove,mats,histPenalty,...info});
+    out.push({routeId,len,value,startGroove,endGroove:groove,mats,...info});
   }
   out.sort((a,b)=>b.value-a.value);
   C.dayCache.set(startGroove,out);
@@ -1115,15 +1130,14 @@ function solverMaterialize(light){
   return {
     value:light.value,groove:light.cand.endGroove,mats,
     days:light.parent.days.concat(light.cand),
-    favorGot:light.favorGot,wantedMask:light.wantedMask,
-    histPenalty:light.histPenalty
+    favorGot:light.favorGot,wantedMask:light.wantedMask
   };
 }
 function solverWeeklySearch(limits){
   const C=SOLVER_CTX;
   let beam=[{
     value:0,groove:0,mats:new Uint16Array(SOLVER_MATERIAL_NAMES.length),days:[],
-    favorGot:new Uint8Array(C.favorIds.length),wantedMask:0n,histPenalty:0
+    favorGot:new Uint8Array(C.favorIds.length),wantedMask:0n
   }];
 
   for(let day=0;day<5;day++){
@@ -1136,12 +1150,11 @@ function solverWeeklySearch(limits){
         for(let i=0;i<favorGot.length;i++)favorGot[i]=Math.min(C.favorNeeds[i],favorGot[i]+cand.favorAdds[i]);
         const wantedMask=state.wantedMask|cand.wantedMask;
         const value=state.value+cand.value;
-        const histPenalty=state.histPenalty+cand.histPenalty;
         const key=solverGroupKey(cand.endGroove,favorGot,wantedMask);
         let heap=groups.get(key);if(!heap){heap=[];groups.set(key,heap)}
-        // Within the same requirement/groove state, value dominates; recent history is a very light tie-breaker.
-        const score=value-histPenalty*0.015;
-        solverHeapPush(heap,{score,value,parent:state,cand,favorGot,wantedMask,histPenalty},SOLVER_PER_GROUP_KEEP);
+        // Beam探索中は価値・必須条件だけで絞る。履歴と「少なめ」は最終候補の比較だけに使う。
+        const score=value;
+        solverHeapPush(heap,{score,value,parent:state,cand,favorGot,wantedMask},SOLVER_PER_GROUP_KEEP);
       }
     }
 
@@ -1149,8 +1162,8 @@ function solverWeeklySearch(limits){
     for(const heap of groups.values())lights.push(...heap);
     lights.sort((a,b)=>{
       const pa=solverProgressScore(a),pb=solverProgressScore(b);
-      const sa=a.value + pa - a.histPenalty*0.015;
-      const sb=b.value + pb - b.histPenalty*0.015;
+      const sa=a.value + pa;
+      const sb=b.value + pb;
       return sb-sa;
     });
     beam=lights.slice(0,SOLVER_WEEK_BEAM).map(solverMaterialize);
@@ -1159,8 +1172,8 @@ function solverWeeklySearch(limits){
 
   const feasible=beam.filter(solverRequirementsMet);
   if(!feasible.length)return null;
-  feasible.sort((a,b)=>b.value-a.value || a.histPenalty-b.histPenalty);
-  return feasible[0];
+  feasible.sort((a,b)=>b.value-a.value);
+  return {best:feasible[0],feasible};
 }
 function solverBaseLimit(name,workshops){
   const target=standardSoftCap(name);
@@ -1198,6 +1211,73 @@ function solverBuildLimitsObject(limits){
   for(let i=0;i<limits.length;i++)out[SOLVER_MATERIAL_NAMES[i]]=limits[i];
   return out;
 }
+
+function previousConfirmedMaterials(){
+  const h=loadHistory();
+  return h.length ? {...(h[h.length-1].materials||{})} : {};
+}
+function solverLowMaterialPreference(mats){
+  let maxExcess=0,totalExcess=0;
+  for(const name of lowMaterials){
+    const mi=MATERIAL_INDEX[name];
+    if(mi===undefined)continue;
+    const target=Math.max(1,standardSoftCap(name));
+    const ideal=target*0.5;
+    const qty=mats[mi]||0;
+    // 「少なめ」は目安の約半分までなら同評価。それ以下を無理に0へ追い込まない。
+    const excess=Math.max(0,qty-ideal)/target;
+    maxExcess=Math.max(maxExcess,excess);
+    totalExcess+=excess;
+  }
+  return {maxExcess,totalExcess};
+}
+function solverTwoWeekPreference(mats){
+  const prev=SOLVER_CTX?.previousWeek||{};
+  let maxPenalty=0,totalPenalty=0,maxRatio=0;
+  for(let i=0;i<SOLVER_MATERIAL_NAMES.length;i++){
+    const name=SOLVER_MATERIAL_NAMES[i];
+    const before=prev[name]||0,current=mats[i]||0;
+    if(!before&&!current)continue;
+    const target=Math.max(1,standardSoftCap(name));
+    const ratio=(before+current)/target;
+    maxRatio=Math.max(maxRatio,ratio);
+    // 2週合計が目安の約1.5倍までは気にしすぎない。
+    // 1.8倍、2倍を超えるほど段階的に強く避けるが、禁止条件にはしない。
+    let p=0;
+    if(ratio>1.5)p+=ratio-1.5;
+    if(ratio>1.8)p+=(ratio-1.8)*2;
+    if(ratio>2.0)p+=(ratio-2.0)*4;
+    maxPenalty=Math.max(maxPenalty,p);
+    totalPenalty+=p;
+  }
+  return {maxPenalty,totalPenalty,maxRatio};
+}
+function solverChooseFinalCandidate(feasible,bestValue,valueFloor){
+  if(!feasible?.length)return null;
+  // 履歴・「少なめ」による価値低下は最大2%。
+  // 既存の「価値の優先度」も必ず守る。
+  const preferenceFloor=Math.max(valueFloor||0,bestValue*0.98);
+  const pool=feasible.filter(st=>st.value+1e-9>=preferenceFloor);
+  if(!pool.length)return feasible[0];
+  if(!lowMaterials.size && !Object.keys(SOLVER_CTX?.previousWeek||{}).length)return pool[0];
+
+  let best=null,bestKey=null;
+  for(const st of pool){
+    const low=solverLowMaterialPreference(st.mats);
+    const two=solverTwoWeekPreference(st.mats);
+    // 手動の「少なめ」 > 先週+今週の偏り > 価値、の順。
+    // どちらもソフト選好で、探索上限や必須条件を変更しない。
+    const key=[low.maxExcess,low.totalExcess,two.maxPenalty,two.totalPenalty,-st.value];
+    if(!best){best=st;bestKey=key;continue;}
+    let better=false;
+    for(let i=0;i<key.length;i++){
+      if(Math.abs(key[i]-bestKey[i])<1e-12)continue;
+      better=key[i]<bestKey[i];break;
+    }
+    if(better){best=st;bestKey=key;}
+  }
+  return best;
+}
 function solverProducedFromDays(days){
   const map=new Map();
   for(const day of days)for(const s of day)map.set(s.item.id,(map.get(s.item.id)||0)+s.qty);
@@ -1212,7 +1292,7 @@ function chooseSchedule(){
     "#capAnimal":+$("#capAnimal").value,
     "#capGranary":+$("#capGranary").value
   };
-  ACTIVE_HISTORY_MATERIALS=weightedHistoryMaterials();
+  ACTIVE_HISTORY_MATERIALS=null;
   ACTIVE_WANTED_ITEMS=new Set([...wantedItems].filter(id=>ITEMS.some(i=>i.id===id)));
 
   const avail=available();
@@ -1248,10 +1328,11 @@ function chooseSchedule(){
   if(!SOLVER_CTX.routes.count)throw new Error("現在の条件では、あわせて生産を維持した24時間の日次候補を作れません。");
 
   // Baseline is the best schedule inside the SAME mandatory universe, with no material caps.
-  const baseline=solverWeeklySearch(null);
-  if(!baseline){
+  const baselineSearch=solverWeeklySearch(null);
+  if(!baselineSearch){
     throw new Error("現在の条件では、ねこみみさんのおねがい／作りたい島産品をすべて満たす5日分の候補が見つかりません。");
   }
+  const baseline=baselineSearch.best;
   const floor=baseline.value*retention;
 
   let chosen=null,chosenLimits=null,relaxStep=0;
@@ -1259,11 +1340,13 @@ function chooseSchedule(){
   const maxRelaxStep=capPolicy==="strict"?0:2;
   for(let step=0;step<=maxRelaxStep;step++){
     const limits=solverLimitArray(workshops,step);
-    const found=solverWeeklySearch(limits);
-    if(found){
+    const search=solverWeeklySearch(limits);
+    if(search){
+      const found=search.best;
       bestUnderCap={found,limits,step};
       if(found.value+1e-9>=floor){
-        chosen=found;chosenLimits=limits;relaxStep=step;break;
+        chosen=solverChooseFinalCandidate(search.feasible,found.value,floor);
+        chosenLimits=limits;relaxStep=step;break;
       }
     }
   }
@@ -1295,6 +1378,9 @@ function chooseSchedule(){
     materialLimits:solverBuildLimitsObject(chosenLimits),
     solverRoutes:SOLVER_CTX.routes.count,
     solverDailyCaches:SOLVER_CTX.dayCache.size,
+    finalPreferenceWindow:0.98,
+    lowMaterialCount:lowMaterials.size,
+    previousWeekUsed:Object.keys(SOLVER_CTX.previousWeek||{}).length>0,
     materialPenalty:0
   };
 }
@@ -1532,8 +1618,9 @@ function renderMaterials(){
     const limit=LAST.materialLimits?.[name] ?? solverBaseLimit(name,LAST.workshops||1);
     const cls=qty>limit?"very-heavy":qty===limit?"heavy":"";
     let hint=t==="granary"?"グラナリー":t==="animal"?"飼育":t==="crop"?"作物":"採集";
+    const lowTag=lowMaterials.has(name)?' <span class="pill low-policy-pill">少なめ</span>':'';
     return `<div class="material-card ${cls}">
-      <span class="mname">${t==="granary"?"⚠ ":""}${name} <span class="pill">${hint}</span></span>
+      <span class="mname">${t==="granary"?"⚠ ":""}${name} <span class="pill">${hint}</span>${lowTag}</span>
       <span class="mqty">×${qty}</span>
     </div>`;
   }).join("");
@@ -1557,9 +1644,10 @@ function render(){
 $("#rank").addEventListener("change",()=>{
   $("#workshops").value=autoWorkshops(+$("#rank").value);
 
-  // Drop exclusions for materials that are no longer relevant at the selected rank.
+  // Drop material policies for materials that are no longer relevant at the selected rank.
   const visibleNames=new Set(allMaterials().map(m=>m.name));
   excludedMaterials=new Set([...excludedMaterials].filter(name=>visibleNames.has(name)));
+  lowMaterials=new Set([...lowMaterials].filter(name=>visibleNames.has(name)&&!excludedMaterials.has(name)));
 
   renderExclude();
   fillFavorSelects();
@@ -1583,8 +1671,8 @@ document.querySelectorAll('input[name="capPolicy"]').forEach(r=>r.addEventListen
 ["#capGather","#capCrop","#capAnimal","#capGranary"].forEach(sel=>$(sel).addEventListener("change",save));
 $("#filter").oninput=renderExclude;
 $("#wantedFilter").oninput=renderWanted;
-$("#allOn").onclick=()=>{allMaterials().forEach(m=>excludedMaterials.add(m.name));renderExclude();updateExcludeSummary();fillFavorSelects();wantedItems.clear();renderWanted();updateWantedSummary();save()};
-$("#allOff").onclick=()=>{excludedMaterials.clear();renderExclude();updateExcludeSummary();fillFavorSelects();renderWanted();updateWantedSummary();save()};
+$("#allOn").onclick=()=>{lowMaterials.clear();allMaterials().forEach(m=>excludedMaterials.add(m.name));renderExclude();updateExcludeSummary();fillFavorSelects();wantedItems.clear();renderWanted();updateWantedSummary();save()};
+$("#allOff").onclick=()=>{excludedMaterials.clear();lowMaterials.clear();renderExclude();updateExcludeSummary();fillFavorSelects();renderWanted();updateWantedSummary();save()};
 $("#confirmWeek").onclick=()=>{
   if(!LAST || !LAST.materials){
     $("#historyStatus").textContent="先にスケジュールを生成してください。";
@@ -1671,7 +1759,7 @@ $("#generate").onclick=()=>{
 };
 $("#saveBtn").onclick=()=>{save();alert("設定を保存しました。")};
 $("#reset").onclick=()=>{
-  localStorage.removeItem(STORAGE_KEY);excludedMaterials.clear();wantedItems.clear();
+  localStorage.removeItem(STORAGE_KEY);excludedMaterials.clear();lowMaterials.clear();wantedItems.clear();
   $("#rank").value=5;$("#workshops").value=3;$("#landmarks").value=2;
   $("#favorOff").checked=true;$("#favorOn").checked=false;$("#favors").classList.remove("on");$("#searchModeSelect").value="standard";if($("#retentionSelect"))$("#retentionSelect").value="0.94";const autoCapPolicy=document.querySelector('input[name="capPolicy"][value="auto"]');if(autoCapPolicy)autoCapPolicy.checked=true;$("#capGather").value=25;$("#capCrop").value=20;$("#capAnimal").value=16;$("#capGranary").value=12;
   fillFavorSelects();renderExclude();updateExcludeSummary();

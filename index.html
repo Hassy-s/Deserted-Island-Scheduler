@@ -11,11 +11,11 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v1.4.2</span>
+      <span class="ver">v1.5.0</span>
     </div>
 
   </div>
-  <div class="header-note">※ 素材の使用をできるだけ分散し、採取・補充の負担を抑えながら青船貨を稼ぐことを目的としたツールです。ゲーム内の需要・人気度は考慮せず、島産品の基本価値と週間の素材負担をもとに計算しています。<br><span class="header-note-action">生成後、「今週分を確定」ボタンを押すと素材の使用履歴が保存され、次週以降の使用素材が偏りにくくなります。生成したスケジュールの島産品をクリックすると、置き換え候補を表示できます。</span></div>
+  <div class="header-note">※ 素材の使用をできるだけ分散し、採取・補充の負担を抑えながら青船貨を稼ぐことを目的としたツールです。ゲーム内の需要・人気度は考慮せず、島産品の基本価値と週間の素材負担をもとに計算しています。<br><span class="header-note-action">生成後、「今週分を確定」ボタンを押すと素材の使用履歴が保存され、次週は先週＋今週の2週間で同じ素材に偏りすぎない候補を優先します。生成したスケジュールの島産品をクリックすると、置き換え候補を表示できます。</span></div>
 
   <div class="layout">
     <aside>
@@ -54,16 +54,17 @@
 
 <section class="panel exclude-panel">
         <details id="excludeDetails">
-          <summary class="panel-title exclude-summary">使いたくない素材 <span id="excludeCount" class="summary-count">0件除外</span></summary>
+          <summary class="panel-title exclude-summary">素材の使用方針 <span id="excludeCount" class="summary-count">すべて通常</span></summary>
         <div class="panel-body">
+          <div class="small material-policy-help">素材ごとに「通常 / 少なめ / 使わない」を選べます。「少なめ」は、その素材カテゴリの使用目安のおよそ半分を目標にしますが、必要なら超えて使用します。「使わない」は完全に候補から除外します。</div>
           <div class="exclude-head exclude-head-compact">
             <div class="exclude-actions">
-              <button class="secondary" id="allOn">すべて除外</button>
-              <button class="secondary" id="allOff">除外をすべて解除</button>
+              <button class="secondary" id="allOff">すべて通常</button>
+              <button class="secondary" id="allOn">すべて使わない</button>
             </div>
           </div>
           <input id="filter" type="text" placeholder="素材名を検索">
-          <div id="itemGrid" class="exclude-box" style="margin-top:8px"></div>
+          <div id="itemGrid" class="exclude-box material-policy-box" style="margin-top:8px"></div>
           <div id="excludeSummary" class="small" style="margin-top:7px"></div>
           <div class="small" style="margin-top:3px">現在の開拓ランクで実際に入手可能な素材だけを表示します。</div>
         </div>
@@ -73,7 +74,7 @@
 <section class="panel search-panel">
         <details id="searchSettingsDetails">
           <summary class="panel-title search-summary">検索設定</summary>
-          <div class="small" style="padding:0 14px 8px">日次ランキングを作成し、週5日を組み合わせる段階で素材上限を直接守ります。直近の確定履歴は、同程度の候補での軽い優先順位にだけ使用します。</div>
+          <div class="small" style="padding:0 14px 8px">日次ランキングを作成し、週5日を組み合わせる段階で素材上限を直接守ります。最後に、最高価値から2%以内の候補だけで「少なめ」指定と先週＋今週の素材負担を比較します。</div>
           <div class="panel-body">
           <input id="searchModeSelect" type="hidden" value="standard">
           <div class="form-row">
@@ -111,7 +112,7 @@
             <div class="small" style="line-height:1.7">
               <b>価値の優先度：</b>最高価値のスケジュールと比べて、どこまで価値低下を許容するかを指定します。数値を下げるほど素材上限を維持しやすく、数値を上げるほど青船貨価値を優先します。例：94%なら最大6%の価値低下を許容して素材負担を抑えます。<br>
               <b>素材上限の扱い：</b>「自動緩和」は基本上限で価値の優先度を満たせない時だけ、工房数ぶんずつ最大2段階まで緩和します。「上限を厳守」は基本上限を1個でも超える候補を採用しません。<br>
-              <b>素材使用の目安：</b>設定した数値を目安に、素材の使用量が偏りすぎないよう調整します。「自動緩和」では、条件を満たせない場合のみ素材使用量の許容範囲を少し広げます。「上限を厳守」では、許容範囲を広げずに生成します。
+              <b>素材使用の目安：</b>設定した数値を目安に、素材の使用量が偏りすぎないよう調整します。「自動緩和」では、条件を満たせない場合のみ素材使用量の許容範囲を少し広げます。「上限を厳守」では、許容範囲を広げずに生成します。<br><b>素材の使用方針・履歴：</b>「少なめ」は使用目安のおよそ半分を目標にしますが、上限ではありません。また、先週の確定履歴がある場合は先週＋今週の2週間合計が偏りすぎない案を優先します。どちらも、その上限条件で得られた最高価値から2%以内の候補だけで比較するため、素材を避けるために価値を大きく落とすことはありません。
             </div>
           </div>
 
@@ -203,7 +204,7 @@
       <section id="materialPanel" class="panel material-panel" style="display:none">
         <div class="panel-title">5日分の必要素材</div>
         <div id="materialGrid" class="material-grid"></div>
-        <div class="note">※ 表示数は全工房分です。生成時は各素材の実効上限を1個でも超える週間候補を除外します。手動の置き換え後は上限超過も表示されます。</div>
+        <div class="note">※ 表示数は全工房分です。生成時は各素材の実効上限を超える週間候補を除外します。「少なめ」はソフトな目標のため、必要な場合は目安の半分を超えて使用します。手動の置き換え後は上限超過も表示されます。</div>
       </section>
 
       <div class="info-box">
@@ -222,7 +223,8 @@
           <li>週5日を組み合わせるBeam探索では、週間素材数を正確に数え、実効上限を超えた候補をその場で除外します。</li>
           <li>ねこみみさんのおねがいと「作りたい島産品」は、どちらも必須条件として生成します。</li>
           <li>「自動緩和」では基本上限で価値の優先度を満たせない時だけ最大2段階まで緩和し、「上限を厳守」では基本上限を固定します。</li>
-          <li>確定済みの直近数週間の素材履歴は、価値がほぼ同じ候補の軽いタイブレークとして使います。</li>
+          <li>上限条件を満たす候補のうち、その条件での最高価値から2%以内だけを最終比較し、「少なめ」指定素材を目安の約半分へ近づけることを優先します。</li>
+          <li>先週の確定履歴がある場合は、その最終候補の中で先週＋今週の2週間合計が偏りすぎない案を優先します。収まりきらない場合も失敗にはせず、2%以内で最も負担の軽い案を採用します。</li>
         </ul>
       </div>
     </main>
