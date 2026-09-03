@@ -43,7 +43,7 @@ function historyMaterialPenalty(item,workshops){
   return p;
 }
 
-let excludedMaterials=new Set(), lowMaterials=new Set(), wantedItems=new Set(), LAST=null, activeDay=0;
+let excludedMaterials=new Set(), lowMaterials=new Set(), wantedItems=new Set(), LAST=null, activeDay=0, materialView="all";
 let EDIT_UNDO=[], EDIT_REDO=[];
 let REPLACE_CTX=null, REPLACE_SHOW_ALL=false;
 const HISTORY_REDO_KEY="island_workshop_scheduler_history_redo_v1";
@@ -205,45 +205,77 @@ function materialPolicy(name){
 }
 function updateExcludeSummary(){
   const blocked=ITEMS.filter(itemUsesExcludedMaterial).length;
-  $("#excludeSummary").textContent=`少なめ：${lowMaterials.size}件 / 使わない：${excludedMaterials.size}件 / 対象外になる島産品：${blocked}品`;
+  $("#excludeSummary").textContent=`少なめ：${lowMaterials.size}件 / 除外：${excludedMaterials.size}件 / 対象外になる島産品：${blocked}品`;
   const count=$("#excludeCount");
   if(count){
     count.textContent=lowMaterials.size||excludedMaterials.size
-      ? `少なめ ${lowMaterials.size} / 使わない ${excludedMaterials.size}`
-      : "すべて通常";
+      ? `少なめ ${lowMaterials.size} / 除外 ${excludedMaterials.size}`
+      : "指定なし";
   }
+}
+function updateMaterialViewButtons(){
+  document.querySelectorAll('[data-material-view]').forEach(btn=>{
+    const active=btn.dataset.materialView===materialView;
+    btn.classList.toggle("active",active);
+    btn.setAttribute("aria-pressed",active?"true":"false");
+  });
 }
 function renderExclude(){
   const q=$("#filter").value.trim(),grid=$("#itemGrid");
   grid.innerHTML="";
+  updateMaterialViewButtons();
+
+  const header=document.createElement("div");
+  header.className="material-policy-header";
+  header.innerHTML=`
+    <span class="policy-head">少なめ</span>
+    <span class="policy-head">除外</span>
+    <span>素材</span>
+    <span class="type-head">区分</span>`;
+  grid.appendChild(header);
+
   allMaterials()
     .filter(m=>!q||m.name.includes(q))
-    .forEach(m=>{
+    .filter(m=>materialView==="low"?lowMaterials.has(m.name):materialView==="exclude"?excludedMaterials.has(m.name):true)
+    .forEach((m)=>{
       const policy=materialPolicy(m.name);
       const d=document.createElement("div");
-      d.className="itemcheck materialcheck";
+      d.className=`itemcheck materialcheck policy-${policy}`;
       d.innerHTML=`
-        <span class="iname">${m.name}</span>
-        <span class="pill">${materialTypeLabel(m.type)}</span>
-        <select class="material-policy-select policy-${policy}" data-name="${m.name}" aria-label="${m.name}の使用方針">
-          <option value="normal" ${policy==="normal"?"selected":""}>通常</option>
-          <option value="low" ${policy==="low"?"selected":""}>少なめ</option>
-          <option value="exclude" ${policy==="exclude"?"selected":""}>使わない</option>
-        </select>`;
+        <label class="material-policy-check low" title="少なめ">
+          <input type="checkbox" data-name="${m.name}" data-policy="low" aria-label="${m.name}：少なめ" ${policy==="low"?"checked":""}>
+        </label>
+        <label class="material-policy-check exclude" title="除外">
+          <input type="checkbox" data-name="${m.name}" data-policy="exclude" aria-label="${m.name}：除外" ${policy==="exclude"?"checked":""}>
+        </label>
+        <span class="iname" title="${m.name}">${m.name}</span>
+        <span class="pill">${materialTypeLabel(m.type)}</span>`;
       grid.appendChild(d)
     });
-  grid.querySelectorAll("select.material-policy-select").forEach(sel=>sel.onchange=()=>{
-    const name=sel.dataset.name,policy=sel.value;
-    excludedMaterials.delete(name);lowMaterials.delete(name);
-    if(policy==="exclude")excludedMaterials.add(name);
-    else if(policy==="low")lowMaterials.add(name);
+
+  grid.querySelectorAll('input[type="checkbox"][data-policy]').forEach(box=>box.onchange=()=>{
+    const name=box.dataset.name,policy=box.dataset.policy;
+    if(policy==="low"){
+      if(box.checked){
+        lowMaterials.add(name);
+        excludedMaterials.delete(name); // 排他：少なめONなら除外OFF
+      }else{
+        lowMaterials.delete(name);
+      }
+    }else if(policy==="exclude"){
+      if(box.checked){
+        excludedMaterials.add(name);
+        lowMaterials.delete(name); // 排他：除外ONなら少なめOFF
+      }else{
+        excludedMaterials.delete(name);
+      }
+    }
     renderExclude();updateExcludeSummary();fillFavorSelects();
     const visibleWanted=new Set(wantedAvailableItems().map(i=>i.id));
     wantedItems=new Set([...wantedItems].filter(id=>visibleWanted.has(id)));
     renderWanted();updateWantedSummary();save()
   })
 }
-
 
 function wantedAvailableItems(){
   const rank=+$("#rank").value;
@@ -1672,7 +1704,11 @@ document.querySelectorAll('input[name="capPolicy"]').forEach(r=>r.addEventListen
 $("#filter").oninput=renderExclude;
 $("#wantedFilter").oninput=renderWanted;
 $("#allOn").onclick=()=>{lowMaterials.clear();allMaterials().forEach(m=>excludedMaterials.add(m.name));renderExclude();updateExcludeSummary();fillFavorSelects();wantedItems.clear();renderWanted();updateWantedSummary();save()};
-$("#allOff").onclick=()=>{excludedMaterials.clear();lowMaterials.clear();renderExclude();updateExcludeSummary();fillFavorSelects();renderWanted();updateWantedSummary();save()};
+$("#allOff").onclick=()=>{excludedMaterials.clear();renderExclude();updateExcludeSummary();fillFavorSelects();renderWanted();updateWantedSummary();save()};
+document.querySelectorAll('[data-material-view]').forEach(btn=>btn.addEventListener("click",()=>{
+  materialView=btn.dataset.materialView||"all";
+  renderExclude();
+}));
 $("#confirmWeek").onclick=()=>{
   if(!LAST || !LAST.materials){
     $("#historyStatus").textContent="先にスケジュールを生成してください。";
