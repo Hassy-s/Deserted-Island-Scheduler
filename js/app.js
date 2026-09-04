@@ -930,13 +930,22 @@ function preserveEarlyWeekDiversity(weeks, dayIndex, cap){
 }
 
 
-// v1.4.0 ---------------------------------------------------------
-// Solver-style daily ranking + exact weekly material-cap Beam search.
-// No material-price / penalty tuning is used for the generation decision.
+// v1.6.0 RC1 -----------------------------------------------------
+// Staged Pareto-lite weekly search.
+// 90-98%: K160/400 -> K224/600 -> K320/1200, stopping after weekday optimization reaches the target.
+// 100%: run every allowed stage/relaxation and keep the best weekday-optimized result.
+// Material-history / "少なめ" preferences are only applied inside the existing 2% final-selection window.
 const SOLVER_K_PER_LEN=80;
 const SOLVER_REQ_K=20;
 const SOLVER_WEEK_BEAM=650;
 const SOLVER_PER_GROUP_KEEP=90;
+const SOLVER_LITE_STAGES=[
+  {k:160,maxStates:400,label:"K160 / 400"},
+  {k:224,maxStates:600,label:"K224 / 600"},
+  {k:320,maxStates:1200,label:"K320 / 1200"}
+];
+const SOLVER_LITE_BUCKET_KEEP=2;
+const SOLVER_LITE_TOP_PRESSURES=3;
 const SOLVER_ITEM_INDEX=new Map(ITEMS.map((item,i)=>[item.id,i]));
 const SOLVER_MATERIAL_NAMES=Object.keys(MATERIAL_UNLOCK).sort();
 let SOLVER_CTX=null;
@@ -1001,7 +1010,7 @@ function solverPrepare(avail,workshops,cap,targets,wantedIds){
     avail,availableIdx,allowed,adj,workshops,cap,
     wantedList,wantedBitByItemId,wantedAllMask,
     favorIds,favorNeeds,favorIndexByItemId,requiredGlobalIdx,
-    routes:null,dayCache:new Map(),routeMatCache:new Map(),maskCountCache:new Map(),
+    routes:null,dayCache:new Map(),liteDayCache:new Map(),routeMatCache:new Map(),maskCountCache:new Map(),
     previousWeek:previousConfirmedMaterials()
   };
   solverEnumerateRoutes();
@@ -1075,6 +1084,8 @@ function solverRouteRequirementInfo(routeId){
   }
   return {wantedMask,favorAdds,coverScore,requiredIndices};
 }
+
+// The v1.5.x Beam search remains as a fast no-cap baseline estimator and fallback.
 function solverDailyCandidates(startGroove){
   const C=SOLVER_CTX;
   if(C.dayCache.has(startGroove))return C.dayCache.get(startGroove);
@@ -1156,7 +1167,6 @@ function solverFitsLimits(mats,sparse,limits){
   return true;
 }
 function solverMaterialize(light){
-  const C=SOLVER_CTX;
   const mats=new Uint16Array(light.parent.mats);
   for(const [mi,q] of light.cand.mats)mats[mi]+=q;
   return {
@@ -1184,7 +1194,6 @@ function solverWeeklySearch(limits){
         const value=state.value+cand.value;
         const key=solverGroupKey(cand.endGroove,favorGot,wantedMask);
         let heap=groups.get(key);if(!heap){heap=[];groups.set(key,heap)}
-        // Beam探索中は価値・必須条件だけで絞る。履歴と「少なめ」は最終候補の比較だけに使う。
         const score=value;
         solverHeapPush(heap,{score,value,parent:state,cand,favorGot,wantedMask},SOLVER_PER_GROUP_KEEP);
       }
@@ -1194,9 +1203,7 @@ function solverWeeklySearch(limits){
     for(const heap of groups.values())lights.push(...heap);
     lights.sort((a,b)=>{
       const pa=solverProgressScore(a),pb=solverProgressScore(b);
-      const sa=a.value + pa;
-      const sb=b.value + pb;
-      return sb-sa;
+      return (b.value+pb)-(a.value+pa);
     });
     beam=lights.slice(0,SOLVER_WEEK_BEAM).map(solverMaterialize);
     if(!beam.length)break;
@@ -1207,11 +1214,9 @@ function solverWeeklySearch(limits){
   feasible.sort((a,b)=>b.value-a.value);
   return {best:feasible[0],feasible};
 }
+
 function solverBaseLimit(name,capPolicy){
   const target=standardSoftCap(name);
-  // Keep the user-entered ceiling as-is.
-  // Strict: exact input value.
-  // Auto: input value + small allowance.
   return capPolicy==="strict" ? target : target+5;
 }
 function solverLimitArray(workshops,relaxStep,capPolicy){
@@ -1221,10 +1226,230 @@ function solverLimitArray(workshops,relaxStep,capPolicy){
   }
   return arr;
 }
-function solverRouteToSlots(cand){
+
+// ---- Pareto-lite daily pool / weekly diversity search -----------------
+function solverLiteDailyCandidates(startGroove,k){
+  const C=SOLVER_CTX,key=`${k}|${startGroove}`;
+  if(C.liteDayCache.has(key))return C.liteDayCache.get(key);
+
+  const slotValue=Array.from({length:6},()=>new Int32Array(ITEMS.length));
+  let g=startGroove;
+  for(let pos=0;pos<6;pos++){
+    if(pos>0)g=Math.min(C.cap,g+C.workshops);
+    const qty=C.workshops*(pos===0?1:2);
+    for(const gi of C.availableIdx)slotValue[pos][gi]=slotExportValue(ITEMS[gi],qty,g);
+  }
+
+  const general={3:[],4:[],5:[],6:[]},coverage={3:[],4:[],5:[],6:[]};
+  const reqHeaps=new Map();
+  const reqK=Math.max(SOLVER_REQ_K,Math.ceil(k/4));
+  for(const gi of C.requiredGlobalIdx)reqHeaps.set(gi,{3:[],4:[],5:[],6:[]});
+
+  for(let r=0;r<C.routes.count;r++){
+    const len=C.routes.lens[r],off=r*6;
+    let value=0;
+    for(let p=0;p<len;p++)value+=slotValue[p][C.routes.slots[off+p]];
+    solverHeapPush(general[len],{routeId:r,value,score:value},k);
+
+    if(C.requiredGlobalIdx.size){
+      const info=solverRouteRequirementInfo(r);
+      solverHeapPush(coverage[len],{routeId:r,value,score:value+info.coverScore},k);
+      for(const gi of info.requiredIndices){
+        const hs=reqHeaps.get(gi);
+        if(hs)solverHeapPush(hs[len],{routeId:r,value,score:value},reqK);
+      }
+    }
+  }
+
+  const routeIds=new Set();
+  for(const len of [3,4,5,6]){
+    for(const x of general[len])routeIds.add(x.routeId);
+    for(const x of coverage[len])routeIds.add(x.routeId);
+  }
+  for(const hs of reqHeaps.values())for(const len of [3,4,5,6])for(const x of hs[len])routeIds.add(x.routeId);
+
+  const out=[];
+  for(const routeId of routeIds){
+    const len=C.routes.lens[routeId],off=routeId*6;
+    let value=0,groove=startGroove;
+    for(let p=0;p<len;p++){
+      if(p>0)groove=Math.min(C.cap,groove+C.workshops);
+      value+=slotValue[p][C.routes.slots[off+p]];
+    }
+    const info=solverRouteRequirementInfo(routeId);
+    out.push({
+      routeId,len,value,startGroove,endGroove:groove,
+      mats:solverRouteMaterials(routeId),...info
+    });
+  }
+  out.sort((a,b)=>b.value-a.value);
+  C.liteDayCache.set(key,out);
+  return out;
+}
+function solverLiteMaterialize(parent,cand){
+  const C=SOLVER_CTX,mats=new Uint16Array(parent.mats);
+  let sum=parent.sum;
+  for(const [mi,q] of cand.mats){mats[mi]+=q;sum+=q;}
+  const favorGot=new Uint8Array(parent.favorGot);
+  for(let i=0;i<favorGot.length;i++)favorGot[i]=Math.min(C.favorNeeds[i],favorGot[i]+cand.favorAdds[i]);
+  return {
+    value:parent.value+cand.value,groove:cand.endGroove,mats,sum,
+    days:parent.days.concat(cand),favorGot,wantedMask:parent.wantedMask|cand.wantedMask
+  };
+}
+function solverLiteBucketKey(st,limits){
+  const top=[];
+  let used=0,maxPressure=0;
+  for(let mi=0;mi<st.mats.length;mi++){
+    const q=st.mats[mi];
+    if(!q)continue;
+    used++;
+    const ref=Math.max(4,limits?.[mi]||standardSoftCap(SOLVER_MATERIAL_NAMES[mi])||20);
+    const ratio=q/ref;
+    maxPressure=Math.max(maxPressure,ratio);
+    const pb=Math.min(9,Math.floor(ratio*4));
+    if(top.length<SOLVER_LITE_TOP_PRESSURES){
+      top.push([ratio,mi,pb]);top.sort((a,b)=>b[0]-a[0]||a[1]-b[1]);
+    }else if(ratio>top[top.length-1][0]){
+      top[top.length-1]=[ratio,mi,pb];top.sort((a,b)=>b[0]-a[0]||a[1]-b[1]);
+    }
+  }
+  const sumBucket=Math.floor(st.sum/16);
+  const maxBucket=Math.min(12,Math.floor(maxPressure*5));
+  const signature=top.map(x=>`${x[1]}:${x[2]}`).join(",");
+  return `${solverGroupKey(st.groove,st.favorGot,st.wantedMask)}|${maxBucket}|${sumBucket}|${used}|${signature}`;
+}
+function solverLiteStateBetter(a,b){
+  if(a.value!==b.value)return a.value>b.value;
+  if(a.sum!==b.sum)return a.sum<b.sum;
+  return solverProgressScore(a)>solverProgressScore(b);
+}
+function solverLiteBucketInsert(bucket,cand){
+  let i=0;
+  while(i<bucket.length&&solverLiteStateBetter(bucket[i],cand))i++;
+  bucket.splice(i,0,cand);
+  if(bucket.length>SOLVER_LITE_BUCKET_KEEP)bucket.length=SOLVER_LITE_BUCKET_KEEP;
+}
+function solverLiteDiversityScore(st){
+  return st.value+solverProgressScore(st);
+}
+function solverLiteDiversityTrim(bucketMap,limit,metrics){
+  const entries=[...bucketMap.values()];
+  let total=0;
+  for(const a of entries)total+=a.length;
+  if(total<=limit){
+    const out=[];for(const a of entries)out.push(...a);return out;
+  }
+
+  metrics.safety=true;metrics.safetyCuts+=total-limit;
+  const selected=[],seen=new Set();
+  function add(st){
+    if(!st||seen.has(st)||selected.length>=limit)return;
+    seen.add(st);selected.push(st);
+  }
+
+  // First preserve at least one representative for each exact requirement-progress state.
+  const reqBest=new Map();
+  for(const a of entries){
+    for(const st of a){
+      const key=solverGroupKey(st.groove,st.favorGot,st.wantedMask);
+      const old=reqBest.get(key);
+      if(!old||solverLiteStateBetter(st,old))reqBest.set(key,st);
+    }
+  }
+  [...reqBest.values()].sort((a,b)=>solverLiteDiversityScore(b)-solverLiteDiversityScore(a)).forEach(add);
+
+  // Then preserve material-pattern diversity: one leader per bucket.
+  const leaders=entries.map(a=>a[0]).filter(Boolean).sort((a,b)=>solverLiteDiversityScore(b)-solverLiteDiversityScore(a));
+  leaders.forEach(add);
+
+  // Fill the remaining seats with second representatives / best remaining labels.
+  const rest=[];
+  for(const a of entries)for(const st of a)if(!seen.has(st))rest.push(st);
+  rest.sort((a,b)=>solverLiteDiversityScore(b)-solverLiteDiversityScore(a)||a.sum-b.sum);
+  rest.forEach(add);
+  return selected;
+}
+function solverLiteWeeklySearch(limits,k,maxStates){
+  const C=SOLVER_CTX;
+  const metrics={generated:0,maxStates:1,bucketCount:0,safety:false,safetyCuts:0};
+  let states=[{
+    value:0,groove:0,mats:new Uint16Array(SOLVER_MATERIAL_NAMES.length),sum:0,days:[],
+    favorGot:new Uint8Array(C.favorIds.length),wantedMask:0n
+  }];
+
+  for(let day=0;day<5;day++){
+    const buckets=new Map();
+    for(const state of states){
+      const cands=solverLiteDailyCandidates(state.groove,k);
+      for(const cand of cands){
+        if(!solverFitsLimits(state.mats,cand.mats,limits))continue;
+        metrics.generated++;
+        const next=solverLiteMaterialize(state,cand);
+        const key=solverLiteBucketKey(next,limits);
+        let bucket=buckets.get(key);if(!bucket){bucket=[];buckets.set(key,bucket);}
+        solverLiteBucketInsert(bucket,next);
+      }
+    }
+    metrics.bucketCount=Math.max(metrics.bucketCount,buckets.size);
+    states=solverLiteDiversityTrim(buckets,maxStates,metrics);
+    metrics.maxStates=Math.max(metrics.maxStates,states.length);
+    if(!states.length)break;
+  }
+
+  const feasible=states.filter(solverRequirementsMet);
+  if(!feasible.length)return null;
+  return {feasible,metrics};
+}
+
+// ---- Weekday optimization ---------------------------------------------
+function solverPermutations5(){
+  const out=[],a=[0,1,2,3,4];
+  function rec(pos){
+    if(pos===5){out.push(a.slice());return;}
+    for(let i=pos;i<5;i++){
+      [a[pos],a[i]]=[a[i],a[pos]];rec(pos+1);[a[pos],a[i]]=[a[i],a[pos]];
+    }
+  }
+  rec(0);return out;
+}
+const SOLVER_WEEKDAY_PERMS=solverPermutations5();
+function solverEvaluateWeekdayOrder(st,order){
+  const C=SOLVER_CTX;
+  let groove=0,value=0;
+  for(const di of order){
+    const cand=st.days[di],off=cand.routeId*6;
+    for(let p=0;p<cand.len;p++){
+      if(p>0)groove=Math.min(C.cap,groove+C.workshops);
+      const item=ITEMS[C.routes.slots[off+p]];
+      const qty=C.workshops*(p===0?1:2);
+      value+=slotExportValue(item,qty,groove);
+    }
+  }
+  return {value,groove};
+}
+function solverOptimizeWeekdays(st){
+  if(st._weekdayOpt)return st._weekdayOpt;
+  let best=null;
+  for(const order of SOLVER_WEEKDAY_PERMS){
+    const r=solverEvaluateWeekdayOrder(st,order);
+    if(!best||r.value>best.value)best={value:r.value,groove:r.groove,order:order.slice()};
+  }
+  st._weekdayOpt=best;
+  return best;
+}
+function solverBestOrderedInfo(feasible){
+  if(!feasible?.length)return null;
+  // Keep stage evaluation lightweight: the Pareto-lite search already ranks by weekly value.
+  // Reorder only the raw-value leader, matching the benchmarked staged solver.
+  let state=feasible[0];
+  for(let i=1;i<feasible.length;i++)if(feasible[i].value>state.value)state=feasible[i];
+  return {state,opt:solverOptimizeWeekdays(state)};
+}
+function solverRouteToSlotsAtGroove(cand,startGroove){
   const C=SOLVER_CTX,slots=[];
   const off=cand.routeId*6;
-  let groove=cand.startGroove,time=0,prev=null;
+  let groove=startGroove,time=0;
   for(let p=0;p<cand.len;p++){
     const item=ITEMS[C.routes.slots[off+p]];
     const isEff=p>0;
@@ -1233,10 +1458,23 @@ function solverRouteToSlots(cand){
     const qty=C.workshops*(isEff?2:1);
     const valueWithGroove=slotExportValue(item,qty,grooveAfter);
     slots.push({item,start:time,end:time+item.time,eff:isEff,qty,grooveBefore,grooveAfter,valueWithGroove});
-    time+=item.time;groove=grooveAfter;prev=item;
+    time+=item.time;groove=grooveAfter;
   }
-  return slots;
+  return {slots,endGroove:groove};
 }
+function solverRouteToSlots(cand){
+  return solverRouteToSlotsAtGroove(cand,cand.startGroove).slots;
+}
+function solverBuildOrderedDays(st,opt){
+  const days=[];
+  let groove=0;
+  for(const di of opt.order){
+    const built=solverRouteToSlotsAtGroove(st.days[di],groove);
+    days.push(built.slots);groove=built.endGroove;
+  }
+  return {days,groove};
+}
+
 function solverBuildMaterialsObject(mats){
   const out={};
   for(let i=0;i<mats.length;i++)if(mats[i])out[SOLVER_MATERIAL_NAMES[i]]=mats[i];
@@ -1247,7 +1485,6 @@ function solverBuildLimitsObject(limits){
   for(let i=0;i<limits.length;i++)out[SOLVER_MATERIAL_NAMES[i]]=limits[i];
   return out;
 }
-
 function previousConfirmedMaterials(){
   const h=loadHistory();
   return h.length ? {...(h[h.length-1].materials||{})} : {};
@@ -1260,7 +1497,6 @@ function solverLowMaterialPreference(mats){
     const target=Math.max(1,standardSoftCap(name));
     const ideal=target*0.5;
     const qty=mats[mi]||0;
-    // 「少なめ」は目安の約半分までなら同評価。それ以下を無理に0へ追い込まない。
     const excess=Math.max(0,qty-ideal)/target;
     maxExcess=Math.max(maxExcess,excess);
     totalExcess+=excess;
@@ -1277,8 +1513,6 @@ function solverTwoWeekPreference(mats){
     const target=Math.max(1,standardSoftCap(name));
     const ratio=(before+current)/target;
     maxRatio=Math.max(maxRatio,ratio);
-    // 2週合計が目安の約1.5倍までは気にしすぎない。
-    // 1.8倍、2倍を超えるほど段階的に強く避けるが、禁止条件にはしない。
     let p=0;
     if(ratio>1.5)p+=ratio-1.5;
     if(ratio>1.8)p+=(ratio-1.8)*2;
@@ -1288,36 +1522,43 @@ function solverTwoWeekPreference(mats){
   }
   return {maxPenalty,totalPenalty,maxRatio};
 }
-function solverChooseFinalCandidate(feasible,bestValue,valueFloor){
-  if(!feasible?.length)return null;
-  // 履歴・「少なめ」による価値低下は最大2%。
-  // 既存の「価値の優先度」も必ず守る。
-  const preferenceFloor=Math.max(valueFloor||0,bestValue*0.98);
-  const pool=feasible.filter(st=>st.value+1e-9>=preferenceFloor);
-  if(!pool.length)return feasible[0];
-  if(!lowMaterials.size && !Object.keys(SOLVER_CTX?.previousWeek||{}).length)return pool[0];
+function solverChooseFinalOrderedCandidate(feasible,bestInfo,valueFloor){
+  if(!feasible?.length||!bestInfo)return null;
+  const rawBest=bestInfo.state.value;
+  const pool=feasible.filter(st=>st.value+1e-9>=rawBest*0.98);
+  if(!pool.length)return bestInfo;
+  if(!lowMaterials.size && !Object.keys(SOLVER_CTX?.previousWeek||{}).length)return bestInfo;
 
-  let best=null,bestKey=null;
+  let selected=null,bestKey=null;
   for(const st of pool){
     const low=solverLowMaterialPreference(st.mats);
     const two=solverTwoWeekPreference(st.mats);
-    // 手動の「少なめ」 > 先週+今週の偏り > 価値、の順。
-    // どちらもソフト選好で、探索上限や必須条件を変更しない。
     const key=[low.maxExcess,low.totalExcess,two.maxPenalty,two.totalPenalty,-st.value];
-    if(!best){best=st;bestKey=key;continue;}
+    if(!selected){selected=st;bestKey=key;continue;}
     let better=false;
     for(let i=0;i<key.length;i++){
       if(Math.abs(key[i]-bestKey[i])<1e-12)continue;
       better=key[i]<bestKey[i];break;
     }
-    if(better){best=st;bestKey=key;}
+    if(better){selected=st;bestKey=key;}
   }
-  return best;
+  if(!selected)return bestInfo;
+  const info={state:selected,opt:solverOptimizeWeekdays(selected)};
+  // The value-priority threshold is judged after weekday optimization.
+  return info.opt.value+1e-9>=(valueFloor||0) ? info : bestInfo;
 }
 function solverProducedFromDays(days){
   const map=new Map();
   for(const day of days)for(const s of day)map.set(s.item.id,(map.get(s.item.id)||0)+s.qty);
   return map;
+}
+function solverRememberBest(current,candidate){
+  if(!candidate)return current;
+  if(!current)return candidate;
+  if(candidate.opt.value>current.opt.value)return candidate;
+  if(candidate.opt.value<current.opt.value)return current;
+  if(candidate.step<current.step)return candidate;
+  return current;
 }
 
 function chooseSchedule(){
@@ -1352,7 +1593,6 @@ function chooseSchedule(){
     }
   }
 
-  // Wanted products are hard requirements in the new engine.
   for(const id of ACTIVE_WANTED_ITEMS){
     if(!avail.some(x=>x.id===id)){
       const item=ITEMS.find(x=>x.id===id);
@@ -1363,38 +1603,54 @@ function chooseSchedule(){
   solverPrepare(avail,workshops,cap,targets,ACTIVE_WANTED_ITEMS);
   if(!SOLVER_CTX.routes.count)throw new Error("現在の条件では、あわせて生産を維持した24時間の日次候補を作れません。");
 
-  // Baseline is the best schedule inside the SAME mandatory universe, with no material caps.
-  const baselineSearch=solverWeeklySearch(null);
+  // Fast baseline in the same mandatory universe. Weekday order is optimized before the retention floor is made.
+  let baselineSearch=solverWeeklySearch(null);
+  if(!baselineSearch){
+    baselineSearch=solverLiteWeeklySearch(null,320,1200);
+  }
   if(!baselineSearch){
     throw new Error("現在の条件では、ねこみみさんのおねがい／作りたい島産品をすべて満たす5日分の候補が見つかりません。");
   }
-  const baseline=baselineSearch.best;
-  const floor=baseline.value*retention;
+  const baselineBest=solverBestOrderedInfo(baselineSearch.feasible);
+  const baselineValue=baselineBest.opt.value;
+  const floor=baselineValue*retention;
 
-  let chosen=null,chosenLimits=null,relaxStep=0;
-  let bestUnderCap=null;
+  let chosenInfo=null,chosenLimits=null,relaxStep=0,chosenStage="";
+  let bestSeen=null;
   const maxRelaxStep=capPolicy==="strict"?0:2;
+  const fullSearch=retention>=1-1e-12;
+
+  outer:
   for(let step=0;step<=maxRelaxStep;step++){
     const limits=solverLimitArray(workshops,step,capPolicy);
-    const search=solverWeeklySearch(limits);
-    if(search){
-      const found=search.best;
-      bestUnderCap={found,limits,step};
-      if(found.value+1e-9>=floor){
-        chosen=solverChooseFinalCandidate(search.feasible,found.value,floor);
-        chosenLimits=limits;relaxStep=step;break;
+    for(const stage of SOLVER_LITE_STAGES){
+      const search=solverLiteWeeklySearch(limits,stage.k,stage.maxStates);
+      if(!search)continue;
+      const best=solverBestOrderedInfo(search.feasible);
+      if(!best)continue;
+
+      const candidate={...best,limits,step,stage:stage.label,search};
+      bestSeen=solverRememberBest(bestSeen,candidate);
+
+      if(!fullSearch && best.opt.value+1e-9>=floor){
+        const preferred=solverChooseFinalOrderedCandidate(search.feasible,best,floor);
+        chosenInfo=preferred||best;
+        chosenLimits=limits;relaxStep=step;chosenStage=stage.label;
+        break outer;
       }
     }
   }
-  if(!chosen){
+
+  if(fullSearch){
+    if(bestSeen){
+      chosenInfo={state:bestSeen.state,opt:bestSeen.opt};
+      chosenLimits=bestSeen.limits;relaxStep=bestSeen.step;chosenStage=bestSeen.stage;
+    }
+  }else if(!chosenInfo){
     if(capPolicy==="strict"){
-      if(bestUnderCap){
-        // Strict mode prioritizes the exact material ceiling.
-        // If the requested value ratio cannot be reached, show the
-        // highest-value schedule that still satisfies that ceiling.
-        chosen=bestUnderCap.found;
-        chosenLimits=bestUnderCap.limits;
-        relaxStep=bestUnderCap.step;
+      if(bestSeen){
+        chosenInfo={state:bestSeen.state,opt:bestSeen.opt};
+        chosenLimits=bestSeen.limits;relaxStep=bestSeen.step;chosenStage=bestSeen.stage;
       }else{
         throw new Error("「上限を厳守」の条件では、必須条件を満たす5日分のスケジュールを生成できません。素材使用の目安・除外素材・必須条件を見直してください。");
       }
@@ -1403,7 +1659,10 @@ function chooseSchedule(){
     }
   }
 
-  const days=chosen.days.map(solverRouteToSlots);
+  if(!chosenInfo||!chosenLimits)throw new Error("条件内のスケジュールを生成できませんでした。");
+  const chosen=chosenInfo.state,opt=chosenInfo.opt;
+  const built=solverBuildOrderedDays(chosen,opt);
+  const days=built.days;
   const usedCount=solverProducedFromDays(days);
   const favorNeeds=new Map();
   for(let i=0;i<targets.length;i++)favorNeeds.set(targets[i],Math.max(0,SOLVER_CTX.favorNeeds[i]-(chosen.favorGot[i]||0)));
@@ -1412,14 +1671,17 @@ function chooseSchedule(){
 
   return{
     days,workshops,targets,favorNeeds,usedCount,
-    estimatedValue:chosen.value,baselineValue:baseline.value,
-    valueRatio:baseline.value?chosen.value/baseline.value:1,
+    estimatedValue:opt.value,baselineValue,
+    valueRatio:baselineValue?opt.value/baselineValue:1,
     retention,relaxStep,capPolicy,
-    effTransitions,totalSlots,groove:chosen.groove,grooveCap:cap,
+    effTransitions,totalSlots,groove:built.groove,grooveCap:cap,
     materials:solverBuildMaterialsObject(chosen.mats),
     materialLimits:solverBuildLimitsObject(chosenLimits),
     solverRoutes:SOLVER_CTX.routes.count,
-    solverDailyCaches:SOLVER_CTX.dayCache.size,
+    solverDailyCaches:(SOLVER_CTX.liteDayCache?.size||0)+(SOLVER_CTX.dayCache?.size||0),
+    solverStrategy:"staged-pareto-lite",
+    solverStage:chosenStage,
+    weekdayOptimized:true,
     finalPreferenceWindow:0.98,
     lowMaterialCount:lowMaterials.size,
     previousWeekUsed:Object.keys(SOLVER_CTX.previousWeek||{}).length>0,

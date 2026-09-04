@@ -11,7 +11,7 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v1.5.10</span>
+      <span class="ver">v1.6.0 RC1</span>
     </div>
 
   </div>
@@ -82,7 +82,7 @@
 <section class="panel search-panel">
         <details id="searchSettingsDetails">
           <summary class="panel-title search-summary">検索設定</summary>
-          <div class="small" style="padding:0 14px 8px">日次ランキングを作成し、週5日を組み合わせる段階で素材上限を直接守ります。最後に、最高価値から2%以内の候補だけで「少なめ」指定と先週＋今週の素材負担を比較します。</div>
+          <div class="small" style="padding:0 14px 8px">軽量な探索から始め、価値の優先度に届かない時だけ探索幅を段階的に広げます。各段階で5日間の曜日順も最適化し、最後に最高価値から2%以内の候補だけで「少なめ」指定と先週＋今週の素材負担を比較します。</div>
           <div class="panel-body">
           <input id="searchModeSelect" type="hidden" value="standard">
           <div class="form-row">
@@ -118,7 +118,7 @@
           <details class="search-settings-help" style="margin-top:16px;padding-top:13px;border-top:1px solid #ded9cb">
             <summary style="cursor:pointer;font-size:12px;font-weight:800;color:#565044;user-select:none">設定について</summary>
             <div class="small" style="line-height:1.7;margin-top:9px">
-              <b>価値の優先度：</b>最高価値のスケジュールと比べて、どこまで価値低下を許容するかを指定します。数値を下げるほど素材上限を維持しやすく、数値を上げるほど青船貨価値を優先します。例：94%なら最大6%の価値低下を許容して素材負担を抑えます。<br>
+              <b>価値の優先度：</b>最高価値のスケジュールと比べて、どこまで価値低下を許容するかを指定します。90〜98%では軽い探索から始め、曜日順を最適化した価値が設定ラインに届いた時点で終了します。100%は許された探索を最後まで行うため、他の設定より時間がかかります。<br>
               <b>素材上限の扱い：</b>「自動緩和」は設定値に少量の許容幅を持たせ、価値の優先度を満たせない時だけ工房数ぶんずつ最大2段階まで広げます。「上限を厳守」は入力した数値をそのまま上限として使用し、1個でも超える候補を採用しません。<br>
               <b>素材使用の目安：</b>設定した数値を目安に、素材の使用量が偏りすぎないよう調整します。上限値そのものを工房数に合わせて丸める処理は行いません。「自動緩和」では必要に応じて許容範囲を広げ、「上限を厳守」では入力した数値を超えません。<br><b>素材の節約・除外・履歴：</b>「少なめ」は使用目安のおよそ半分を目標にしますが、上限ではありません。また、先週の確定履歴がある場合は先週＋今週の2週間合計が偏りすぎない案を優先します。どちらも、その上限条件で得られた最高価値から2%以内の候補だけで比較するため、素材を避けるために価値を大きく落とすことはありません。
             </div>
