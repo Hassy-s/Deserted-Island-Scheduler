@@ -629,6 +629,34 @@ button:disabled{opacity:.65;cursor:wait}
 }
 .generate-status{min-height:0;margin-top:5px}
 .generate-status:empty{display:none}
+
+.generate-progress{
+  margin-top:8px;
+  padding:10px 11px;
+  border:1px solid #d6cfb8;
+  border-radius:7px;
+  background:#fffdf6;
+  box-shadow:0 1px 3px #0000000c;
+}
+.generate-progress[hidden]{display:none!important}
+.generate-progress-head,.generate-progress-foot{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+}
+.generate-progress-phase{font-size:13px;font-weight:800;color:#474338}
+.generate-progress-elapsed{font-size:12px;color:#777064;white-space:nowrap}
+.generate-progress-track{
+  height:9px;margin:8px 0 7px;border-radius:999px;overflow:hidden;background:#e6e0cf;
+}
+.generate-progress-bar{
+  height:100%;width:0%;background:#7a7717;border-radius:999px;
+  transition:width .18s ease;
+}
+.generate-progress-detail{font-size:12px;color:#6b655b;min-width:0}
+.generate-cancel{
+  width:auto!important;min-height:30px!important;padding:4px 10px!important;
+  font-size:12px!important;white-space:nowrap;
+}
+
 summary.panel-title{
   list-style:none;
   cursor:pointer;

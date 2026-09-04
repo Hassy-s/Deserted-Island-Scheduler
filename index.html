@@ -11,7 +11,7 @@
   <div class="topbar">
     <div style="display:flex;align-items:center;gap:10px;min-width:0">
       <h1>🏝️ 無人島工房スケジューラー</h1>
-      <span class="ver">v1.6.0 RC1</span>
+      <span class="ver">v1.6.0 RC2</span>
     </div>
 
   </div>
@@ -37,6 +37,17 @@
       <div class="generate-row">
         <button id="generate" class="primary main-generate">⚙ スケジュールを生成</button>
         <div id="generateStatus" class="small generate-status"></div>
+        <div id="generateProgress" class="generate-progress" hidden>
+          <div class="generate-progress-head">
+            <span id="generatePhase" class="generate-progress-phase">生成の準備中…</span>
+            <span id="generateElapsed" class="generate-progress-elapsed">0.0秒</span>
+          </div>
+          <div class="generate-progress-track"><div id="generateProgressBar" class="generate-progress-bar"></div></div>
+          <div class="generate-progress-foot">
+            <span id="generateDetail" class="generate-progress-detail">条件を確認しています</span>
+            <button id="cancelGenerate" class="secondary generate-cancel" type="button">停止</button>
+          </div>
+        </div>
       </div>
 
       <div class="settings-section-label">各種設定</div>

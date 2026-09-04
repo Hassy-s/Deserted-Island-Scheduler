@@ -930,10 +930,10 @@ function preserveEarlyWeekDiversity(weeks, dayIndex, cap){
 }
 
 
-// v1.6.0 RC1 -----------------------------------------------------
+// v1.6.0 RC2 -----------------------------------------------------
 // Staged Pareto-lite weekly search.
 // 90-98%: K160/400 -> K224/600 -> K320/1200, stopping after weekday optimization reaches the target.
-// 100%: run every allowed stage/relaxation and keep the best weekday-optimized result.
+// 100%: use Fast 3-stage search at the loosest allowed cap step, then infer the minimum cap step actually needed.
 // Material-history / "少なめ" preferences are only applied inside the existing 2% final-selection window.
 const SOLVER_K_PER_LEN=80;
 const SOLVER_REQ_K=20;
@@ -949,6 +949,8 @@ const SOLVER_LITE_TOP_PRESSURES=3;
 const SOLVER_ITEM_INDEX=new Map(ITEMS.map((item,i)=>[item.id,i]));
 const SOLVER_MATERIAL_NAMES=Object.keys(MATERIAL_UNLOCK).sort();
 let SOLVER_CTX=null;
+let SOLVER_CANCELLED=false;
+let SOLVER_BUSY=false;
 
 function solverBitCount(mask){
   let n=0n,c=0;
@@ -1011,9 +1013,11 @@ function solverPrepare(avail,workshops,cap,targets,wantedIds){
     wantedList,wantedBitByItemId,wantedAllMask,
     favorIds,favorNeeds,favorIndexByItemId,requiredGlobalIdx,
     routes:null,dayCache:new Map(),liteDayCache:new Map(),routeMatCache:new Map(),maskCountCache:new Map(),
+    routeReqSelectedCache:new Map(),reqCompact:null,
     previousWeek:previousConfirmedMaterials()
   };
   solverEnumerateRoutes();
+  solverBuildRequirementCompactCache();
 }
 function solverEnumerateRoutes(){
   const C=SOLVER_CTX;
@@ -1046,6 +1050,34 @@ function solverEnumerateRoutes(){
   }
   dfs(0,-1,0);
   C.routes={slots,lens,count};
+}
+function solverBuildRequirementCompactCache(){
+  const C=SOLVER_CTX;
+  if(!C.requiredGlobalIdx.size){C.reqCompact=null;return;}
+  const requiredList=[...C.requiredGlobalIdx];
+  // Keep exact semantics for unusually large mandatory sets by falling back
+  // to the original route requirement scan.
+  if(requiredList.length>32){C.reqCompact=null;return;}
+  const requiredBitByGlobal=new Int16Array(ITEMS.length);requiredBitByGlobal.fill(-1);
+  for(let i=0;i<requiredList.length;i++)requiredBitByGlobal[requiredList[i]]=i;
+  const coverScore=new Int32Array(C.routes.count),reqMask=new Uint32Array(C.routes.count);
+  for(let r=0;r<C.routes.count;r++){
+    const len=C.routes.lens[r],off=r*6;
+    let score=0,mask=0;
+    for(let p=0;p<len;p++){
+      const gi=C.routes.slots[off+p],item=ITEMS[gi];
+      if(C.wantedBitByItemId.has(item.id))score+=100000;
+      const fi=C.favorIndexByItemId.get(item.id);
+      if(fi!==undefined){
+        const qty=C.workshops*(p===0?1:2);
+        score+=Math.min(qty,C.favorNeeds[fi])*18000;
+      }
+      const bi=requiredBitByGlobal[gi];
+      if(bi>=0)mask|=(1<<bi)>>>0;
+    }
+    coverScore[r]=score;reqMask[r]=mask>>>0;
+  }
+  C.reqCompact={requiredList,coverScore,reqMask};
 }
 function solverRouteMaterials(routeId){
   const C=SOLVER_CTX;
@@ -1083,6 +1115,14 @@ function solverRouteRequirementInfo(routeId){
     if(C.requiredGlobalIdx.has(gi))requiredIndices.push(gi);
   }
   return {wantedMask,favorAdds,coverScore,requiredIndices};
+}
+function solverRouteRequirementInfoSelected(routeId){
+  const C=SOLVER_CTX;
+  const old=C.routeReqSelectedCache.get(routeId);
+  if(old)return old;
+  const info=solverRouteRequirementInfo(routeId);
+  C.routeReqSelectedCache.set(routeId,info);
+  return info;
 }
 
 // The v1.5.x Beam search remains as a fast no-cap baseline estimator and fallback.
@@ -1226,6 +1266,17 @@ function solverLimitArray(workshops,relaxStep,capPolicy){
   }
   return arr;
 }
+function solverMatsFitLimitArray(mats,limits){
+  for(let i=0;i<mats.length;i++)if((mats[i]||0)>(limits[i]||0))return false;
+  return true;
+}
+function solverMinimalRelaxStep(mats,workshops,capPolicy,maxStep=2){
+  if(capPolicy==="strict")return 0;
+  for(let step=0;step<=maxStep;step++){
+    if(solverMatsFitLimitArray(mats,solverLimitArray(workshops,step,capPolicy)))return step;
+  }
+  return maxStep;
+}
 
 // ---- Pareto-lite daily pool / weekly diversity search -----------------
 function solverLiteDailyCandidates(startGroove,k){
@@ -1252,11 +1303,24 @@ function solverLiteDailyCandidates(startGroove,k){
     solverHeapPush(general[len],{routeId:r,value,score:value},k);
 
     if(C.requiredGlobalIdx.size){
-      const info=solverRouteRequirementInfo(r);
-      solverHeapPush(coverage[len],{routeId:r,value,score:value+info.coverScore},k);
-      for(const gi of info.requiredIndices){
-        const hs=reqHeaps.get(gi);
-        if(hs)solverHeapPush(hs[len],{routeId:r,value,score:value},reqK);
+      if(C.reqCompact){
+        solverHeapPush(coverage[len],{routeId:r,value,score:value+C.reqCompact.coverScore[r]},k);
+        let mask=C.reqCompact.reqMask[r]>>>0;
+        while(mask){
+          const low=(mask & -mask)>>>0;
+          const bit=31-Math.clz32(low);
+          const gi=C.reqCompact.requiredList[bit];
+          const hs=reqHeaps.get(gi);
+          if(hs)solverHeapPush(hs[len],{routeId:r,value,score:value},reqK);
+          mask=(mask & (mask-1))>>>0;
+        }
+      }else{
+        const info=solverRouteRequirementInfo(r);
+        solverHeapPush(coverage[len],{routeId:r,value,score:value+info.coverScore},k);
+        for(const gi of info.requiredIndices){
+          const hs=reqHeaps.get(gi);
+          if(hs)solverHeapPush(hs[len],{routeId:r,value,score:value},reqK);
+        }
       }
     }
   }
@@ -1276,10 +1340,12 @@ function solverLiteDailyCandidates(startGroove,k){
       if(p>0)groove=Math.min(C.cap,groove+C.workshops);
       value+=slotValue[p][C.routes.slots[off+p]];
     }
-    const info=solverRouteRequirementInfo(routeId);
+    const info=solverRouteRequirementInfoSelected(routeId);
+    const mats=solverRouteMaterials(routeId);
+    let matSum=0;for(const [,q] of mats)matSum+=q;
     out.push({
       routeId,len,value,startGroove,endGroove:groove,
-      mats:solverRouteMaterials(routeId),...info
+      mats,matSum,...info
     });
   }
   out.sort((a,b)=>b.value-a.value);
@@ -1395,6 +1461,128 @@ function solverLiteWeeklySearch(limits,k,maxStates){
     states=solverLiteDiversityTrim(buckets,maxStates,metrics);
     metrics.maxStates=Math.max(metrics.maxStates,states.length);
     if(!states.length)break;
+  }
+
+  const feasible=states.filter(solverRequirementsMet);
+  if(!feasible.length)return null;
+  return {feasible,metrics};
+}
+
+
+// ---- RC2 optimized async Pareto-lite search ----------------------------
+function solverYieldToBrowser(){
+  return new Promise(resolve=>{
+    if(typeof requestAnimationFrame==="function")requestAnimationFrame(()=>setTimeout(resolve,0));
+    else setTimeout(resolve,0);
+  });
+}
+function solverCheckCancelled(){
+  if(SOLVER_CANCELLED)throw new Error("__SOLVER_CANCELLED__");
+}
+function solverLiteLightProgress(parent,cand,wantedMask){
+  const C=SOLVER_CTX;
+  let score=solverMaskCount(wantedMask)*3200;
+  for(let i=0;i<C.favorNeeds.length;i++){
+    const v=Math.min(C.favorNeeds[i],(parent.favorGot[i]||0)+(cand.favorAdds[i]||0));
+    score+=v*700;
+  }
+  return score;
+}
+function solverLiteLightBetter(a,b){
+  if(a.value!==b.value)return a.value>b.value;
+  if(a.sum!==b.sum)return a.sum<b.sum;
+  return a.progress>b.progress;
+}
+function solverLiteLightInsert(bucket,cand){
+  let i=0;
+  while(i<bucket.length&&solverLiteLightBetter(bucket[i],cand))i++;
+  bucket.splice(i,0,cand);
+  if(bucket.length>SOLVER_LITE_BUCKET_KEEP)bucket.length=SOLVER_LITE_BUCKET_KEEP;
+}
+function solverIncInitialMeta(){return {used:0,top:[]}}
+function solverIncEntry(mi,qty,limits){
+  const ref=Math.max(4,limits?.[mi]||standardSoftCap(SOLVER_MATERIAL_NAMES[mi])||20);
+  const ratio=qty/ref,pb=Math.min(9,Math.floor(ratio*4));
+  return [mi,ratio,pb];
+}
+function solverIncSortTop(arr){
+  arr.sort((a,b)=>b[1]-a[1]||a[0]-b[0]);
+  if(arr.length>3)arr.length=3;
+  return arr;
+}
+function solverIncChildMeta(parent,cand,limits){
+  const pm=parent._incMeta||solverIncInitialMeta(),changed=cand.mats,arr=[];
+  outer:for(const e of pm.top){
+    for(let j=0;j<changed.length;j++)if(changed[j][0]===e[0])continue outer;
+    arr.push(e);
+  }
+  let used=pm.used;
+  for(const [mi,q] of changed){
+    if((parent.mats[mi]||0)===0&&q>0)used++;
+    arr.push(solverIncEntry(mi,(parent.mats[mi]||0)+q,limits));
+  }
+  solverIncSortTop(arr);
+  return {used,top:arr};
+}
+function solverIncGroupPart(parent,cand,wantedMask){
+  const C=SOLVER_CTX;
+  let favors="";
+  for(let i=0;i<C.favorNeeds.length;i++){
+    if(i)favors+=",";
+    favors+=Math.min(C.favorNeeds[i],(parent.favorGot[i]||0)+(cand.favorAdds[i]||0));
+  }
+  return `${cand.endGroove}|${favors}|${wantedMask.toString()}`;
+}
+function solverIncBucketKeyFromMeta(parent,cand,limits,sum,wantedMask,meta){
+  const maxPressure=meta.top.length?meta.top[0][1]:0;
+  const sumBucket=Math.floor(sum/16),maxBucket=Math.min(12,Math.floor(maxPressure*5));
+  const signature=meta.top.map(x=>`${x[0]}:${x[2]}`).join(",");
+  return `${solverIncGroupPart(parent,cand,wantedMask)}|${maxBucket}|${sumBucket}|${meta.used}|${signature}`;
+}
+async function solverLiteWeeklySearchAsync(limits,k,maxStates,onDayProgress){
+  const C=SOLVER_CTX;
+  const metrics={generated:0,maxStates:1,bucketCount:0,safety:false,safetyCuts:0,materialized:0};
+  let states=[{
+    value:0,groove:0,mats:new Uint16Array(SOLVER_MATERIAL_NAMES.length),sum:0,days:[],
+    favorGot:new Uint8Array(C.favorIds.length),wantedMask:0n,_incMeta:solverIncInitialMeta()
+  }];
+
+  for(let day=0;day<5;day++){
+    solverCheckCancelled();
+    const lightBuckets=new Map();
+    for(const state of states){
+      const cands=solverLiteDailyCandidates(state.groove,k);
+      for(const cand of cands){
+        if(!solverFitsLimits(state.mats,cand.mats,limits))continue;
+        metrics.generated++;
+        const wantedMask=state.wantedMask|cand.wantedMask;
+        const value=state.value+cand.value;
+        const sum=state.sum+(cand.matSum??0);
+        const progress=solverLiteLightProgress(state,cand,wantedMask);
+        const incMeta=solverIncChildMeta(state,cand,limits);
+        const key=solverIncBucketKeyFromMeta(state,cand,limits,sum,wantedMask,incMeta);
+        const light={parent:state,cand,value,sum,wantedMask,progress,incMeta};
+        let bucket=lightBuckets.get(key);if(!bucket){bucket=[];lightBuckets.set(key,bucket)}
+        solverLiteLightInsert(bucket,light);
+      }
+    }
+
+    const fullBuckets=new Map();
+    for(const [key,lights] of lightBuckets){
+      const arr=[];
+      for(const light of lights){
+        const child=solverLiteMaterialize(light.parent,light.cand);
+        child._incMeta=light.incMeta;
+        arr.push(child);metrics.materialized++;
+      }
+      fullBuckets.set(key,arr);
+    }
+    metrics.bucketCount=Math.max(metrics.bucketCount,fullBuckets.size);
+    states=solverLiteDiversityTrim(fullBuckets,maxStates,metrics);
+    metrics.maxStates=Math.max(metrics.maxStates,states.length);
+    if(onDayProgress)onDayProgress(day+1,5,metrics);
+    if(!states.length)break;
+    await solverYieldToBrowser();
   }
 
   const feasible=states.filter(solverRequirementsMet);
@@ -1561,7 +1749,9 @@ function solverRememberBest(current,candidate){
   return current;
 }
 
-function chooseSchedule(){
+async function chooseSchedule(onProgress){
+  const progress=typeof onProgress==="function"?onProgress:()=>{};
+  progress({phase:"prepare",percent:2});
   ACTIVE_SEARCH_MODE="standard";
   ACTIVE_CAPS={
     "#capGather":+$("#capGather").value,
@@ -1592,7 +1782,6 @@ function chooseSchedule(){
       targets.push(id);
     }
   }
-
   for(const id of ACTIVE_WANTED_ITEMS){
     if(!avail.some(x=>x.id===id)){
       const item=ITEMS.find(x=>x.id===id);
@@ -1600,53 +1789,88 @@ function chooseSchedule(){
     }
   }
 
+  solverCheckCancelled();
   solverPrepare(avail,workshops,cap,targets,ACTIVE_WANTED_ITEMS);
   if(!SOLVER_CTX.routes.count)throw new Error("現在の条件では、あわせて生産を維持した24時間の日次候補を作れません。");
+  await solverYieldToBrowser();
 
-  // Fast baseline in the same mandatory universe. Weekday order is optimized before the retention floor is made.
+  progress({phase:"baseline",percent:6});
   let baselineSearch=solverWeeklySearch(null);
   if(!baselineSearch){
-    baselineSearch=solverLiteWeeklySearch(null,320,1200);
+    baselineSearch=await solverLiteWeeklySearchAsync(null,320,1200,(day,total)=>{
+      progress({phase:"baseline",day,total,percent:6+(day/total)*4});
+    });
   }
   if(!baselineSearch){
     throw new Error("現在の条件では、ねこみみさんのおねがい／作りたい島産品をすべて満たす5日分の候補が見つかりません。");
   }
   const baselineBest=solverBestOrderedInfo(baselineSearch.feasible);
-  const baselineValue=baselineBest.opt.value;
-  const floor=baselineValue*retention;
+  const baselineValue=baselineBest.opt.value,floor=baselineValue*retention;
 
   let chosenInfo=null,chosenLimits=null,relaxStep=0,chosenStage="";
   let bestSeen=null;
   const maxRelaxStep=capPolicy==="strict"?0:2;
   const fullSearch=retention>=1-1e-12;
+  const plannedPasses=fullSearch?SOLVER_LITE_STAGES.length:(maxRelaxStep+1)*SOLVER_LITE_STAGES.length;
+  let passIndex=0;
+  const fullFeasible=[];
+  const stateSource=new WeakMap();
 
-  outer:
-  for(let step=0;step<=maxRelaxStep;step++){
+  async function runStage(step,stage){
+    passIndex++;
     const limits=solverLimitArray(workshops,step,capPolicy);
+    const search=await solverLiteWeeklySearchAsync(limits,stage.k,stage.maxStates,(day,total)=>{
+      const frac=((passIndex-1)*5+day)/(plannedPasses*5);
+      progress({phase:"search",fullSearch,passIndex,passTotal:plannedPasses,day,total,percent:10+frac*82});
+    });
+    if(!search)return null;
+    const best=solverBestOrderedInfo(search.feasible);
+    if(!best)return null;
+    const candidate={...best,limits,step,stage:stage.label,search};
+    bestSeen=solverRememberBest(bestSeen,candidate);
+    if(fullSearch){
+      for(const st of search.feasible){fullFeasible.push(st);stateSource.set(st,{stage:stage.label,step})}
+    }
+    return candidate;
+  }
+
+  if(fullSearch){
+    // Fast 100%: strict searches step0; auto searches only the loosest step2.
+    const step=maxRelaxStep;
     for(const stage of SOLVER_LITE_STAGES){
-      const search=solverLiteWeeklySearch(limits,stage.k,stage.maxStates);
-      if(!search)continue;
-      const best=solverBestOrderedInfo(search.feasible);
-      if(!best)continue;
-
-      const candidate={...best,limits,step,stage:stage.label,search};
-      bestSeen=solverRememberBest(bestSeen,candidate);
-
-      if(!fullSearch && best.opt.value+1e-9>=floor){
-        const preferred=solverChooseFinalOrderedCandidate(search.feasible,best,floor);
-        chosenInfo=preferred||best;
-        chosenLimits=limits;relaxStep=step;chosenStage=stage.label;
-        break outer;
+      solverCheckCancelled();
+      await runStage(step,stage);
+    }
+    if(bestSeen){
+      let finalBest={state:bestSeen.state,opt:bestSeen.opt};
+      if(lowMaterials.size||Object.keys(SOLVER_CTX.previousWeek||{}).length){
+        // At 100%, preferences may only break ties that preserve the exact best value.
+        const preferred=solverChooseFinalOrderedCandidate(fullFeasible,finalBest,bestSeen.opt.value);
+        if(preferred&&preferred.opt.value+1e-9>=bestSeen.opt.value)finalBest=preferred;
+      }
+      chosenInfo=finalBest;
+      const source=stateSource.get(chosenInfo.state);
+      chosenStage=source?.stage||bestSeen.stage;
+      relaxStep=solverMinimalRelaxStep(chosenInfo.state.mats,workshops,capPolicy,maxRelaxStep);
+      chosenLimits=solverLimitArray(workshops,relaxStep,capPolicy);
+    }
+  }else{
+    outer:for(let step=0;step<=maxRelaxStep;step++){
+      for(const stage of SOLVER_LITE_STAGES){
+        solverCheckCancelled();
+        const candidate=await runStage(step,stage);
+        if(!candidate)continue;
+        if(candidate.opt.value+1e-9>=floor){
+          const preferred=solverChooseFinalOrderedCandidate(candidate.search.feasible,candidate,floor);
+          chosenInfo=preferred||candidate;
+          chosenLimits=candidate.limits;relaxStep=step;chosenStage=stage.label;
+          break outer;
+        }
       }
     }
   }
 
-  if(fullSearch){
-    if(bestSeen){
-      chosenInfo={state:bestSeen.state,opt:bestSeen.opt};
-      chosenLimits=bestSeen.limits;relaxStep=bestSeen.step;chosenStage=bestSeen.stage;
-    }
-  }else if(!chosenInfo){
+  if(!fullSearch&&!chosenInfo){
     if(capPolicy==="strict"){
       if(bestSeen){
         chosenInfo={state:bestSeen.state,opt:bestSeen.opt};
@@ -1658,11 +1882,12 @@ function chooseSchedule(){
       throw new Error(`素材上限を2段階まで自動緩和しても、価値の優先度 ${Math.round(retention*100)}% を満たす5日分のスケジュールを生成できません。`);
     }
   }
-
   if(!chosenInfo||!chosenLimits)throw new Error("条件内のスケジュールを生成できませんでした。");
+
+  progress({phase:"finalize",percent:94});
+  await solverYieldToBrowser();
   const chosen=chosenInfo.state,opt=chosenInfo.opt;
-  const built=solverBuildOrderedDays(chosen,opt);
-  const days=built.days;
+  const built=solverBuildOrderedDays(chosen,opt),days=built.days;
   const usedCount=solverProducedFromDays(days);
   const favorNeeds=new Map();
   for(let i=0;i<targets.length;i++)favorNeeds.set(targets[i],Math.max(0,SOLVER_CTX.favorNeeds[i]-(chosen.favorGot[i]||0)));
@@ -1679,7 +1904,7 @@ function chooseSchedule(){
     materialLimits:solverBuildLimitsObject(chosenLimits),
     solverRoutes:SOLVER_CTX.routes.count,
     solverDailyCaches:(SOLVER_CTX.liteDayCache?.size||0)+(SOLVER_CTX.dayCache?.size||0),
-    solverStrategy:"staged-pareto-lite",
+    solverStrategy:"staged-pareto-lite-rc2",
     solverStage:chosenStage,
     weekdayOptimized:true,
     finalPreferenceWindow:0.98,
@@ -1941,12 +2166,9 @@ function renderMaterials(){
     </div>`;
   }).join("");
 }
-function render(){
-  try{LAST=chooseSchedule();EDIT_UNDO=[];EDIT_REDO=[];updateEditButtons();closeReplacePopover()}
-  catch(e){
-    $("#scheduleBody").innerHTML=`<tr><td colspan="8" style="text-align:center;color:#b94d4d;padding:30px">${e.message}</td></tr>`;
-    return
-  }
+async function render(onProgress){
+  const next=await chooseSchedule(onProgress);
+  LAST=next;EDIT_UNDO=[];EDIT_REDO=[];updateEditButtons();closeReplacePopover();
   renderSummary();
   renderTabs();
   renderDay(0);
@@ -1954,7 +2176,7 @@ function render(){
   $("#weekConfirmBar").style.display="flex";
   const hc=loadHistory().length;
   $("#historyStatus").textContent=hc?`確定済み履歴：${hc}週`:"";
-  save()
+  save();
 }
 
 $("#rank").addEventListener("change",()=>{
@@ -2055,30 +2277,73 @@ document.addEventListener("click",e=>{
   if(!p.hidden && !p.contains(e.target) && !e.target.closest?.("tr.replaceable-row")) closeReplacePopover();
 });
 
-$("#generate").onclick=()=>{
-  const btn=$("#generate");
-  const status=$("#generateStatus");
-  btn.disabled=true;
-  btn.classList.add("generating");
-  btn.textContent="⏳ 生成中…";
-  status.textContent="スケジュールを計算しています。";
+function solverLockUi(){
+  const items=[...document.querySelectorAll("button,input,select")];
+  const saved=items.map(el=>[el,el.disabled]);
+  for(const el of items)if(el.id!=="cancelGenerate")el.disabled=true;
+  $("#cancelGenerate").disabled=false;
+  return ()=>{for(const [el,disabled] of saved)el.disabled=disabled};
+}
+function solverUpdateProgress(info){
+  const phase=$("#generatePhase"),detail=$("#generateDetail"),bar=$("#generateProgressBar");
+  if(info.phase==="prepare"){
+    phase.textContent="生成の準備中…";detail.textContent="条件を確認しています";
+  }else if(info.phase==="baseline"){
+    phase.textContent="候補を準備中…";detail.textContent=info.day?`${info.day}日目の候補を確認しています`:"基準となる組み合わせを確認しています";
+  }else if(info.phase==="search"){
+    phase.textContent=info.fullSearch?`より良い候補を探索中 ${info.passIndex} / ${info.passTotal}`:"スケジュール候補を探索中…";
+    detail.textContent=`${info.day}日目を計算しています`;
+  }else if(info.phase==="finalize"){
+    phase.textContent="結果を整理中…";detail.textContent="曜日と素材の使用量を確認しています";
+  }
+  if(Number.isFinite(info.percent))bar.style.width=`${Math.max(0,Math.min(100,info.percent))}%`;
+}
+$("#cancelGenerate").onclick=()=>{
+  if(!SOLVER_BUSY)return;
+  SOLVER_CANCELLED=true;
+  $("#generatePhase").textContent="停止しています…";
+  $("#generateDetail").textContent="現在の計算区切りまで待っています";
+  $("#cancelGenerate").disabled=true;
+};
+$("#generate").onclick=async()=>{
+  if(SOLVER_BUSY)return;
+  const btn=$("#generate"),status=$("#generateStatus"),panel=$("#generateProgress");
+  const phase=$("#generatePhase"),detail=$("#generateDetail"),bar=$("#generateProgressBar"),elapsed=$("#generateElapsed");
+  SOLVER_BUSY=true;SOLVER_CANCELLED=false;
+  panel.hidden=false;bar.style.width="0%";phase.textContent="生成の準備中…";detail.textContent="条件を確認しています";
+  status.textContent="スケジュールを生成しています。";
+  btn.classList.add("generating");btn.textContent="⏳ 生成中…";
+  const unlock=solverLockUi();
+  const started=performance.now();
+  const updateElapsed=()=>elapsed.textContent=`${((performance.now()-started)/1000).toFixed(1)}秒`;
+  updateElapsed();const timer=setInterval(updateElapsed,100);
 
-  setTimeout(()=>{
-    try{
-      render();
-      status.textContent="生成完了";
-    }catch(err){
+  try{
+    await solverYieldToBrowser();
+    await render(solverUpdateProgress);
+    bar.style.width="100%";phase.textContent="完成！";detail.textContent="スケジュールを生成しました";
+    status.textContent=`生成完了（${((performance.now()-started)/1000).toFixed(1)}秒）`;
+  }catch(err){
+    if(err?.message==="__SOLVER_CANCELLED__"){
+      phase.textContent="生成を停止しました";detail.textContent="前の生成結果はそのまま残っています";
+      status.textContent="生成を停止しました。";
+    }else{
+      phase.textContent="生成できませんでした";detail.textContent=err?.message||"条件を確認してください";
       status.textContent="生成中にエラーが発生しました。";
+      $("#scheduleBody").innerHTML=`<tr><td colspan="8" style="text-align:center;color:#b94d4d;padding:30px">${err?.message||"生成中にエラーが発生しました。"}</td></tr>`;
       console.error(err);
-    }finally{
-      btn.disabled=false;
-      btn.classList.remove("generating");
-      btn.textContent="⚙ スケジュールを生成";
     }
-  },30);
+  }finally{
+    clearInterval(timer);updateElapsed();
+    SOLVER_BUSY=false;SOLVER_CANCELLED=false;
+    unlock();
+    $("#cancelGenerate").disabled=true;
+    btn.classList.remove("generating");btn.textContent="⚙ スケジュールを生成";
+  }
 };
 $("#saveBtn").onclick=()=>{save();alert("設定を保存しました。")};
 $("#reset").onclick=()=>{
+  if(SOLVER_BUSY)return;
   localStorage.removeItem(STORAGE_KEY);excludedMaterials.clear();lowMaterials.clear();wantedItems.clear();
   $("#rank").value=5;$("#workshops").value=3;$("#landmarks").value=2;
   $("#favorOff").checked=true;$("#favorOn").checked=false;$("#favors").classList.remove("on");$("#searchModeSelect").value="standard";if($("#retentionSelect"))$("#retentionSelect").value="0.94";const autoCapPolicy=document.querySelector('input[name="capPolicy"][value="auto"]');if(autoCapPolicy)autoCapPolicy.checked=true;$("#capGather").value=25;$("#capCrop").value=20;$("#capAnimal").value=16;$("#capGranary").value=12;
@@ -2093,6 +2358,7 @@ $("#reset").onclick=()=>{
   $("#tabs").style.display="none";
   $("#materialPanel").style.display="none";
   $("#generateStatus").textContent="";
+  $("#generateProgress").hidden=true;$("#generateProgressBar").style.width="0%";
   const valueWarning=$("#valuePriorityWarning");
   if(valueWarning){valueWarning.hidden=true;valueWarning.textContent="";}
   LAST=null;EDIT_UNDO=[];EDIT_REDO=[];updateEditButtons();closeReplacePopover()
